@@ -1,8 +1,8 @@
-# anvl
+# ANVL
 
-A river based window manager
+An expirimental river based window manager.  
 
-## Dependencies
+## Build Dependencies
 
 - gcc
 - make
@@ -10,13 +10,13 @@ A river based window manager
 - wayland
 - xkbcommon
 
-## Building
+## Build
 
 ```bash
 make build
 ```
 
-## Running
+## Run
 
 ```bash
 river -c .build/anvl
