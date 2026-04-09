@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
 #include <signal.h>
@@ -9,11 +10,35 @@
 #include <wayland-client-protocol.h>
 
 #include <linux/input-event-codes.h>
+#include <wayland-util.h>
 #include <xkbcommon/xkbcommon.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
 #include <river-xkb-bindings-v1-client-protocol.h>
 #include <river-window-management-v1-client-protocol.h>
+
+typedef struct {
+  struct river_window_v1 *river_window;
+  struct wl_list link;
+} Window;
+
+typedef struct {
+  struct river_output_v1 *river_output;
+  struct wl_list link;
+} Output;
+
+typedef struct {
+  struct river_seat_v1 *river_seat;
+  struct wl_list link;
+} Seat;
+
+typedef struct {
+	struct wl_list windows;
+	struct wl_list outputs;
+	struct wl_list seats;
+} WindowManager;
+
+WindowManager anvl;
 
 struct river_window_manager_v1 *window_manager;
 struct river_xkb_bindings_v1 *xkb_bindings;
@@ -57,16 +82,6 @@ void river_seat_v1_shell_surface_interaction(void *data, struct river_seat_v1 *o
 void river_seat_v1_op_delta(void *data, struct river_seat_v1 *obj, int32_t dx, int32_t dy) {}
 void river_seat_v1_op_release(void *data, struct river_seat_v1 *obj) {}
 void river_seat_v1_pointer_position(void *data, struct river_seat_v1 *obj, int32_t x, int32_t y) {}
-
-void river_window_manager_v1_unavailable(void *data, struct river_window_manager_v1 *obj) {}
-void river_window_manager_v1_finished(void *data, struct river_window_manager_v1 *obj) {}
-void river_window_manager_v1_manage_start(void *data, struct river_window_manager_v1 *obj) {}
-void river_window_manager_v1_render_start(void *data, struct river_window_manager_v1 *obj) {}
-void river_window_manager_v1_session_locked(void *data, struct river_window_manager_v1 *obj) {}
-void river_window_manager_v1_session_unlocked(void *data, struct river_window_manager_v1 *obj) {}
-void river_window_manager_v1_window(void *data, struct river_window_manager_v1 *obj, struct river_window_v1 *river_window) {}
-void river_window_manager_v1_output(void *data, struct river_window_manager_v1 *obj, struct river_output_v1 *river_output) {}
-void river_window_manager_v1_seat(void *data, struct river_window_manager_v1 *obj, struct river_seat_v1 *river_seat) {}
 
 const struct river_output_v1_listener output_listener = {
 	.removed = river_output_v1_removed,
@@ -118,6 +133,37 @@ const struct river_seat_v1_listener seat_listener = {
 	.pointer_position = river_seat_v1_pointer_position,
 };
 
+void river_window_manager_v1_unavailable(void *data, struct river_window_manager_v1 *obj) {}
+void river_window_manager_v1_finished(void *data, struct river_window_manager_v1 *obj) {}
+void river_window_manager_v1_manage_start(void *data, struct river_window_manager_v1 *obj) {}
+void river_window_manager_v1_render_start(void *data, struct river_window_manager_v1 *obj) {}
+void river_window_manager_v1_session_locked(void *data, struct river_window_manager_v1 *obj) {}
+void river_window_manager_v1_session_unlocked(void *data, struct river_window_manager_v1 *obj) {}
+
+void river_window_manager_v1_window(void *data, struct river_window_manager_v1 *obj, struct river_window_v1 *river_window) {
+  Window *window = calloc(1, sizeof(Window));
+  window->river_window = river_window;
+
+  river_window_v1_add_listener(window->river_window, &window_listener, window);
+  wl_list_insert(&anvl.windows, &window->link);
+}
+
+void river_window_manager_v1_output(void *data, struct river_window_manager_v1 *obj, struct river_output_v1 *river_output) {
+  Output *output = calloc(1, sizeof(Output));
+  output->river_output = river_output;
+
+  river_output_v1_add_listener(output->river_output, &output_listener, output);
+  wl_list_insert(&anvl.outputs, &output->link);
+}
+
+void river_window_manager_v1_seat(void *data, struct river_window_manager_v1 *obj, struct river_seat_v1 *river_seat) {
+  Seat *seat = calloc(1, sizeof(Seat));
+  seat->river_seat = river_seat;
+
+  river_seat_v1_add_listener(seat->river_seat, &seat_listener, seat);
+  wl_list_insert(&anvl.seats, &seat->link);
+}
+
 static const struct river_window_manager_v1_listener window_manager_listener = {
 	.unavailable = river_window_manager_v1_unavailable,
 	.finished = river_window_manager_v1_finished,
@@ -167,6 +213,10 @@ int main() {
 		fprintf(stderr, "river_window_manager_v1 or river_xkb_bindings_v1 not supported by the Wayland server\n");
 		return 1;
 	}
+
+  wl_list_init(&anvl.windows);
+  wl_list_init(&anvl.outputs);
+  wl_list_init(&anvl.seats);
 
 	river_window_manager_v1_add_listener(window_manager, &window_manager_listener, NULL);
 
