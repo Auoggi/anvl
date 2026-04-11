@@ -1,6 +1,6 @@
 # ANVL
 
-An expirimental river based window manager.  
+An expirimental minimal river based window manager. 
 
 ## Build Dependencies
 
