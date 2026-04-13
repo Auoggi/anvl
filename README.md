@@ -10,6 +10,10 @@ An expirimental minimal river based window manager.
 - wayland
 - xkbcommon
 
+## Additional Runtime Dependencies
+
+- foot
+
 ## Build
 
 ```bash
