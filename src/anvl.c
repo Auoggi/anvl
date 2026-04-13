@@ -6,93 +6,72 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <wayland-client-core.h>
-#include <wayland-client-protocol.h>
-
-#include <linux/input-event-codes.h>
-#include <xkbcommon/xkbcommon.h>
-#include <xkbcommon/xkbcommon-keysyms.h>
-
-#include <river-xkb-bindings-v1-client-protocol.h>
-#include <river-window-management-v1-client-protocol.h>
+#include "anvl.h"
 
 #define LENGTH(A) (sizeof A / sizeof A[0])
 
-#define CTRL RIVER_SEAT_V1_MODIFIERS_CTRL
-#define SUPER RIVER_SEAT_V1_MODIFIERS_MOD4
-#define SHIFT RIVER_SEAT_V1_MODIFIERS_SHIFT
-
-typedef struct Window Window;
-typedef struct Output Output;
-typedef struct Seat Seat;
-
-struct Window {
-  struct river_window_v1 *river_window;
-  struct wl_list link;
-
-  bool focused;
-  bool hovered;
-};
-
-struct Output {
-  struct river_output_v1 *river_output;
-  struct wl_list link;
-};
-
-struct Seat {
-  struct river_seat_v1 *river_seat;
-  struct wl_list link;
-
-  Window *focused;
-  Window *hovered;
-
-  struct wl_list keys;
-  struct wl_list buttons;
-};
-
-typedef struct {
-  struct wl_list windows;
-  struct wl_list outputs;
-  struct wl_list seats;
-} WindowManager;
-
-typedef union {
-  void *v;
-} Arg;
-
-typedef struct {
-  struct river_xkb_binding_v1 *river_xkb_binding;
-  struct wl_list link;
-
-  void (*func)(Arg *arg);
-  Arg *arg;
-} Key;
-
-typedef struct {
-  struct river_pointer_binding_v1 *river_pointer_binding;
-  struct wl_list link;
-
-  bool pressed;
-
-  void (*func)(Arg *arg);
-  Arg *arg;
-} Button;
-
-typedef struct {
-  uint32_t mods;
-  xkb_keysym_t key;
-  void (*func)(Arg *arg);
-  Arg arg;
-} Keys;
-
 WindowManager anvl;
+Output *selmon = NULL;
 
 struct river_window_manager_v1 *window_manager;
 struct river_xkb_bindings_v1 *xkb_bindings;
 
-void shutdown(Arg *arg) {
+void destroy_window(Seat *seat, Arg *arg) {
+  if(seat->focused != NULL) {
+    river_window_v1_close(seat->focused->river_window);
+  }
+}
+
+void select_next_mon(Seat *seat, Arg *arg) {
+  if(selmon != NULL) {
+    Output *next = wl_container_of(selmon->link.next, selmon, link);
+    if(next != NULL && &next->link != &anvl.outputs) {
+      selmon = next;
+      river_seat_v1_pointer_warp(seat->river_seat, selmon->x + selmon->width/2, selmon->y + selmon->height/2);
+    }
+  }
+}
+
+void select_prev_mon(Seat *seat, Arg *arg) {
+  if(selmon != NULL) {
+    Output *prev = wl_container_of(selmon->link.prev, selmon, link);
+    if(prev != NULL && &prev->link != &anvl.outputs) {
+      selmon = prev;
+      river_seat_v1_pointer_warp(seat->river_seat, selmon->x + selmon->width/2, selmon->y + selmon->height/2);
+    }
+  }
+}
+
+void focus_next(Seat *seat, Arg *arg) {
+  if(seat->focused != NULL) {
+    Window *next = wl_container_of(seat->focused->link.next, seat->focused, link);
+    if(next != NULL && &next->link != &anvl.windows) {
+      seat->focused = next;
+      river_seat_v1_pointer_warp(seat->river_seat, seat->focused->x + seat->focused->width/2, seat->focused->y + seat->focused->height/2);
+    }
+  }
+}
+
+void focus_prev(Seat *seat, Arg *arg) {
+  if(seat->focused != NULL) {
+    Window *prev = wl_container_of(seat->focused->link.prev, seat->focused, link);
+    if(prev != NULL && &prev->link != &anvl.windows) {
+      seat->focused = prev;
+      river_seat_v1_pointer_warp(seat->river_seat, seat->focused->x + seat->focused->width/2, seat->focused->y + seat->focused->height/2);
+    }
+  }
+}
+
+void exit_session(Seat *seat, Arg *arg) {
   river_window_manager_v1_exit_session(window_manager);
 }
+
+void spawn(Seat *seat, Arg *arg) {
+  if(fork() == 0) execvp(((char **) arg->v)[0], (char **) arg->v);
+}
+
+// include config.h for definition of keybinds
+#include "config.h"
 
 void river_output_v1_removed(void *data, struct river_output_v1 *obj) {
   Output *output = data;
@@ -103,8 +82,20 @@ void river_output_v1_removed(void *data, struct river_output_v1 *obj) {
 }
 
 void river_output_v1_wl_output(void *data, struct river_output_v1 *obj, uint32_t name) {}
-void river_output_v1_position(void *data, struct river_output_v1 *obj, int32_t x, int32_t y) {}
-void river_output_v1_dimensions(void *data, struct river_output_v1 *obj, int32_t width, int32_t height) {}
+
+void river_output_v1_position(void *data, struct river_output_v1 *obj, int32_t x, int32_t y) {
+  Output *output = data;
+
+  output->x = x;
+  output->y = y;
+}
+
+void river_output_v1_dimensions(void *data, struct river_output_v1 *obj, int32_t width, int32_t height) {
+  Output *output = data;
+
+  output->width = width;
+  output->height = height;
+}
 
 const struct river_output_v1_listener output_listener = {
   .removed = river_output_v1_removed,
@@ -129,7 +120,13 @@ void river_window_v1_closed(void *data, struct river_window_v1 *obj) {
 }
 
 void river_window_v1_dimensions_hint(void *data, struct river_window_v1 *obj, int32_t min_width, int32_t min_height, int32_t max_width, int32_t max_height) {}
-void river_window_v1_dimensions(void *data, struct river_window_v1 *obj, int32_t width, int32_t height) {}
+
+void river_window_v1_dimensions(void *data, struct river_window_v1 *obj, int32_t width, int32_t height) {
+  struct Window *window = data;
+  window->width = width;
+  window->height = height;
+}
+
 void river_window_v1_app_id(void *data, struct river_window_v1 *obj, const char *app_id) {}
 void river_window_v1_title(void *data, struct river_window_v1 *obj, const char *title) {}
 void river_window_v1_parent(void *data, struct river_window_v1 *obj, struct river_window_v1 *parent) {}
@@ -169,7 +166,7 @@ const struct river_window_v1_listener window_listener = {
 
 void river_xkb_binding_v1_pressed(void *data, struct river_xkb_binding_v1 *obj) {
   Key *key = data;
-  key->func(key->arg);
+  key->func(key->seat, key->arg);
 }
 
 void river_xkb_binding_v1_released(void *data, struct river_xkb_binding_v1 *obj) {}
@@ -179,9 +176,10 @@ const struct river_xkb_binding_v1_listener xkb_binding_listener = {
   .released = river_xkb_binding_v1_released,
 };
 
-void xkb_binding_create(Seat *seat, uint32_t modifiers, xkb_keysym_t keysym, void (*func)(Arg *arg), Arg *arg) {
+void xkb_binding_create(Seat *seat, uint32_t modifiers, xkb_keysym_t keysym, void (*func)(Seat *seat, Arg *arg), Arg *arg) {
   Key *key = calloc(1, sizeof(Key));
   key->river_xkb_binding = river_xkb_bindings_v1_get_xkb_binding(xkb_bindings, seat->river_seat, keysym, modifiers);
+  key->seat = seat;
   key->func = func;
   key->arg = arg;
 
@@ -210,9 +208,10 @@ const struct river_pointer_binding_v1_listener pointer_binding_listener = {
   .released = river_pointer_binding_v1_released,
 };
 
-void pointer_binding_create(Seat *seat, uint32_t modifiers, uint32_t ibutton, void (*func)(Arg *arg), Arg *arg) {
+void pointer_binding_create(Seat *seat, uint32_t modifiers, uint32_t ibutton, void (*func)(Seat *seat, Arg *arg), Arg *arg) {
   Button *button = calloc(1, sizeof(Button));
   button->river_pointer_binding = river_seat_v1_get_pointer_binding(seat->river_seat, ibutton, modifiers);
+  button->seat = seat;
   button->func = func;
   button->arg = arg;
 
@@ -267,6 +266,7 @@ void river_seat_v1_pointer_leave(void *data, struct river_seat_v1 *obj) {
 void river_seat_v1_window_interaction(void *data, struct river_seat_v1 *obj, struct river_window_v1 *river_window) {
   Seat *seat = data;
   Window *window = seat->focused;
+
   if(window != NULL) window->focused = false;
   window = river_window_v1_get_user_data(river_window);
 
@@ -275,9 +275,20 @@ void river_seat_v1_window_interaction(void *data, struct river_seat_v1 *obj, str
 }
 
 void river_seat_v1_shell_surface_interaction(void *data, struct river_seat_v1 *obj, struct river_shell_surface_v1 *river_shell_surface) {}
-void river_seat_v1_op_delta(void *data, struct river_seat_v1 *obj, int32_t dx, int32_t dy) {}
-void river_seat_v1_op_release(void *data, struct river_seat_v1 *obj) {}
-void river_seat_v1_pointer_position(void *data, struct river_seat_v1 *obj, int32_t x, int32_t y) {}
+void river_seat_v1_op_delta(void *data, struct river_seat_v1 *obj, int32_t dx, int32_t dy) {} // Used for dragging
+void river_seat_v1_op_release(void *data, struct river_seat_v1 *obj) {} // Used for dragging
+
+void river_seat_v1_pointer_position(void *data, struct river_seat_v1 *obj, int32_t x, int32_t y) {
+  Output *output;
+  wl_list_for_each(output, &anvl.outputs, link) {
+    if(x >= output->x && x < output->x + output->width && y >= output->y && y < output->y + output->height) {
+      selmon = output;
+      return;
+    }
+  }
+  
+  selmon = NULL;
+}
 
 const struct river_seat_v1_listener seat_listener = {
   .removed = river_seat_v1_removed,
@@ -292,7 +303,21 @@ const struct river_seat_v1_listener seat_listener = {
 };
 
 void manage_window(struct Window *window) {}
-void manage_seat(Seat *seat) {}
+
+// I don't know which of these to use
+void manage_seat(Seat *seat) {
+  if(seat->focused == NULL && !wl_list_empty(&anvl.windows)) {
+    seat->focused = wl_container_of(anvl.windows.prev, seat->focused, link);
+  }
+
+  if(seat->focused != NULL) {
+    river_seat_v1_focus_window(seat->river_seat, seat->focused->river_window);
+    river_node_v1_place_top(seat->focused->river_node);
+  } else {
+    river_seat_v1_clear_focus(seat->river_seat);
+  }
+}
+
 void render_seat(Seat *seat) {}
 
 void river_window_manager_v1_unavailable(void *data, struct river_window_manager_v1 *obj) {
@@ -333,11 +358,24 @@ void river_window_manager_v1_session_unlocked(void *data, struct river_window_ma
 void river_window_manager_v1_window(void *data, struct river_window_manager_v1 *obj, struct river_window_v1 *river_window) {
   Window *window = calloc(1, sizeof(Window));
   window->river_window = river_window;
+  window->river_node = river_window_v1_get_node(window->river_window);
   window->hovered = false;
   window->focused = false;
+  window->mon = selmon;
 
   river_window_v1_add_listener(window->river_window, &window_listener, window);
   wl_list_insert(&anvl.windows, &window->link);
+
+  window->x = 0;
+  window->x += window->mon->x;
+  window->y = 0;
+  window->y += window->mon->y;
+  window->width = window->mon->width;
+  window->height = window->mon->height;
+  river_window_v1_use_ssd(window->river_window);
+  river_window_v1_set_tiled(window->river_window, 15);
+  river_node_v1_set_position(window->river_node, window->x, window->y);
+  river_window_v1_propose_dimensions(window->river_window, window->width, window->height);
 }
 
 void river_window_manager_v1_output(void *data, struct river_window_manager_v1 *obj, struct river_output_v1 *river_output) {
@@ -346,11 +384,9 @@ void river_window_manager_v1_output(void *data, struct river_window_manager_v1 *
 
   river_output_v1_add_listener(output->river_output, &output_listener, output);
   wl_list_insert(&anvl.outputs, &output->link);
-}
 
-Keys keybinds[] = {
-  {SUPER|SHIFT, XKB_KEY_q, shutdown, {0}},
-};
+  if(selmon == NULL) selmon = output;
+}
 
 void river_window_manager_v1_seat(void *data, struct river_window_manager_v1 *obj, struct river_seat_v1 *river_seat) {
   Seat *seat = calloc(1, sizeof(Seat));
@@ -369,7 +405,7 @@ void river_window_manager_v1_seat(void *data, struct river_window_manager_v1 *ob
   }
 }
 
-static const struct river_window_manager_v1_listener window_manager_listener = {
+const struct river_window_manager_v1_listener window_manager_listener = {
   .unavailable = river_window_manager_v1_unavailable,
   .finished = river_window_manager_v1_finished,
   .manage_start = river_window_manager_v1_manage_start,
@@ -381,7 +417,7 @@ static const struct river_window_manager_v1_listener window_manager_listener = {
   .seat = river_window_manager_v1_seat,
 };
 
-static void wl_registry_global(void *data, struct wl_registry *registry, uint32_t name, const char *interface, uint32_t version) {
+void wl_registry_global(void *data, struct wl_registry *registry, uint32_t name, const char *interface, uint32_t version) {
   if(strcmp(interface, river_window_manager_v1_interface.name) == 0 && version >= 4) {
     window_manager = wl_registry_bind(registry, name, &river_window_manager_v1_interface, 4);
   }
@@ -391,9 +427,9 @@ static void wl_registry_global(void *data, struct wl_registry *registry, uint32_
   }
 }
 
-static void wl_registry_global_remove(void *data, struct wl_registry *registry, uint32_t name) {}
+void wl_registry_global_remove(void *data, struct wl_registry *registry, uint32_t name) {}
 
-static const struct wl_registry_listener registry_listener = {
+const struct wl_registry_listener registry_listener = {
   .global = wl_registry_global,
   .global_remove = wl_registry_global_remove,
 };
