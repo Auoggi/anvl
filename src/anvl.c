@@ -8,6 +8,8 @@
 
 #include "anvl.h"
 
+#define MIN(A, B) (A < B ? A : B)
+#define MAX(A, B) (A > B ? A : B)
 #define LENGTH(A) (sizeof A / sizeof A[0])
 
 WindowManager anvl;
@@ -59,6 +61,18 @@ void focus_prev(Seat *seat, Arg *arg) {
       seat->focused = prev;
       river_seat_v1_pointer_warp(seat->river_seat, seat->focused->x + seat->focused->width/2, seat->focused->y + seat->focused->height/2);
     }
+  }
+}
+
+void incnmaster(Seat *seat, Arg *arg) {
+  if(seat->focused != NULL) {
+    seat->focused->mon->nmaster += arg->i;
+  }
+}
+
+void setmfact(Seat *seat, Arg *arg) {
+  if(seat->focused != NULL) {
+    seat->focused->mon->mfact += arg->f;
   }
 }
 
@@ -163,6 +177,18 @@ const struct river_window_v1_listener window_listener = {
   .presentation_hint = river_window_v1_presentation_hint,
   .identifier = river_window_v1_identifier,
 };
+
+void window_set_position(Window *window, int x, int y) {
+  window->x = x + window->mon->x;
+  window->y = y + window->mon->y;
+  river_node_v1_set_position(window->river_node, window->x, window->y);
+}
+
+void window_set_dimensions(Window *window, int width, int height) {
+  window->width = width;
+  window->height = height;
+  river_window_v1_propose_dimensions(window->river_window, window->width, window->height);
+}
 
 void river_xkb_binding_v1_pressed(void *data, struct river_xkb_binding_v1 *obj) {
   Key *key = data;
@@ -302,9 +328,6 @@ const struct river_seat_v1_listener seat_listener = {
   .pointer_position = river_seat_v1_pointer_position,
 };
 
-void manage_window(struct Window *window) {}
-
-// I don't know which of these to use
 void manage_seat(Seat *seat) {
   if(seat->focused == NULL && !wl_list_empty(&anvl.windows)) {
     seat->focused = wl_container_of(anvl.windows.prev, seat->focused, link);
@@ -329,10 +352,42 @@ void river_window_manager_v1_finished(void *data, struct river_window_manager_v1
   exit(0);
 }
 
+// TODO: clean up calculation here
 void river_window_manager_v1_manage_start(void *data, struct river_window_manager_v1 *obj) {
-  Window *window;
-  wl_list_for_each(window, &anvl.windows, link) {
-    manage_window(window);
+  Output *output;
+  wl_list_for_each(output, &anvl.outputs, link) {
+    int i = 0;
+    int n = 0;
+    int m = output->nmaster;
+    Window *window;
+    wl_list_for_each(window, &anvl.windows, link) {
+      if(window->mon == output) n++;
+    }
+    m = MAX(0, MIN(n, m));
+    wl_list_for_each(window, &anvl.windows, link) {
+      if(window->mon == output) {
+        river_window_v1_use_ssd(window->river_window);
+        river_window_v1_set_tiled(window->river_window, 15);
+        if(n == m || m == 0) {
+          window_set_position(window, 0, i*(output->height/n));
+          window_set_dimensions(window, output->width, output->height/n);
+        } else if(i < m) {
+          window_set_position(window, 0, i*(output->height/m));
+          window_set_dimensions(window, output->width*output->mfact, output->height/m);
+        } else {
+          window_set_position(window, output->width*output->mfact, (i-m)*(output->height/(n-m)));
+          window_set_dimensions(window, output->width - (output->width*output->mfact), output->height/(n-m));
+        }
+
+        if(i == m - 1) {
+          window_set_dimensions(window, window->width, output->height - ((m-1) * (output->height/m)));
+        } else if(i == n - 1) {
+          window_set_dimensions(window, window->width, output->height - (((n-m) - 1) * (output->height/(n-m))));
+        }
+
+        i++;
+      }
+    }
   }
 
   Seat *seat;
@@ -355,6 +410,7 @@ void river_window_manager_v1_render_start(void *data, struct river_window_manage
 void river_window_manager_v1_session_locked(void *data, struct river_window_manager_v1 *obj) {}
 void river_window_manager_v1_session_unlocked(void *data, struct river_window_manager_v1 *obj) {}
 
+// TODO: Add window to end of list or reverse render order, and autofocus newly created windows
 void river_window_manager_v1_window(void *data, struct river_window_manager_v1 *obj, struct river_window_v1 *river_window) {
   Window *window = calloc(1, sizeof(Window));
   window->river_window = river_window;
@@ -366,21 +422,18 @@ void river_window_manager_v1_window(void *data, struct river_window_manager_v1 *
   river_window_v1_add_listener(window->river_window, &window_listener, window);
   wl_list_insert(&anvl.windows, &window->link);
 
-  window->x = 0;
-  window->x += window->mon->x;
-  window->y = 0;
-  window->y += window->mon->y;
-  window->width = window->mon->width;
-  window->height = window->mon->height;
   river_window_v1_use_ssd(window->river_window);
   river_window_v1_set_tiled(window->river_window, 15);
-  river_node_v1_set_position(window->river_node, window->x, window->y);
-  river_window_v1_propose_dimensions(window->river_window, window->width, window->height);
+
+  window_set_position(window, 0, 0);
+  window_set_dimensions(window, window->mon->width, window->mon->width);
 }
 
 void river_window_manager_v1_output(void *data, struct river_window_manager_v1 *obj, struct river_output_v1 *river_output) {
   Output *output = calloc(1, sizeof(Output));
   output->river_output = river_output;
+  output->nmaster = 1;
+  output->mfact = 0.5f;
 
   river_output_v1_add_listener(output->river_output, &output_listener, output);
   wl_list_insert(&anvl.outputs, &output->link);

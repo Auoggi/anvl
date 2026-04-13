@@ -41,6 +41,9 @@ struct Output {
 
   int width;
   int height;
+
+  int nmaster;
+  float mfact;
 };
 
 struct Seat {
@@ -61,6 +64,8 @@ typedef struct {
 } WindowManager;
 
 typedef union {
+  int i;
+  float f;
   void *v;
 } Arg;
 
@@ -99,6 +104,8 @@ void select_next_mon(Seat *seat, Arg *arg);
 void select_prev_mon(Seat *seat, Arg *arg);
 void focus_next(Seat *seat, Arg *arg);
 void focus_prev(Seat *esat, Arg *arg);
+void incnmaster(Seat *seat, Arg *arg);
+void setmfact(Seat *seat, Arg *arg);
 void exit_session(Seat *seat, Arg *arg);
 void spawn(Seat *seat, Arg *arg);
 
