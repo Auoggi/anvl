@@ -10,6 +10,7 @@ At this time, the window manager is not stable, so expect bugs and crashes.
 
 ## Build Dependencies
 
+- fd
 - gcc
 - make
 - pkgconfig
