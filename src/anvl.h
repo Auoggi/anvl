@@ -32,6 +32,7 @@ struct Window {
   bool hovered;
 
   Output *mon;
+  uint32_t tagmask;
 };
 
 struct Output {
@@ -46,6 +47,9 @@ struct Output {
 
   int nmaster;
   float mfact;
+
+  uint32_t seltag;
+  uint32_t tagmask;
 };
 
 struct Seat {
@@ -68,8 +72,9 @@ typedef struct {
 
 typedef union {
   int i;
-  float f;
   void *v;
+  float f;
+  uint32_t u;
 } Arg;
 
 typedef struct {
@@ -111,5 +116,9 @@ void incnmaster(Seat *seat, Arg *arg);
 void setmfact(Seat *seat, Arg *arg);
 void exit_session(Seat *seat, Arg *arg);
 void spawn(Seat *seat, Arg *arg);
+void view(Seat *seat, Arg *arg);
+void toggleview(Seat *seat, Arg *arg);
+void tag(Seat *seat, Arg *arg);
+void toggletag(Seat *seat, Arg *arg);
 
 #endif /* ANVLH */
