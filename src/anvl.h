@@ -8,7 +8,9 @@
 #include <xkbcommon/xkbcommon.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
+#include <river-xkb-config-v1-client-protocol.h>
 #include <river-xkb-bindings-v1-client-protocol.h>
+#include <river-input-management-v1-client-protocol.h>
 #include <river-window-management-v1-client-protocol.h>
 
 typedef struct Window Window;
@@ -61,6 +63,7 @@ typedef struct {
   struct wl_list windows;
   struct wl_list outputs;
   struct wl_list seats;
+  struct wl_list keyboards;
 } WindowManager;
 
 typedef union {

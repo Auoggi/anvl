@@ -1,7 +1,18 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 202405L
+#endif
+
+#include <sys/mman.h>
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
+
+#include <fcntl.h>
 #include <signal.h>
 #include <string.h>
 #include <unistd.h>
@@ -15,8 +26,12 @@
 WindowManager anvl;
 Output *selmon = NULL;
 
-struct river_window_manager_v1 *window_manager;
+struct xkb_context *xkb_context;
+struct river_xkb_config_v1 *xkb_config;
+struct river_xkb_keymap_v1 *xkb_keymap;
 struct river_xkb_bindings_v1 *xkb_bindings;
+struct river_input_manager_v1 *input_manager;
+struct river_window_manager_v1 *window_manager;
 
 void destroy_window(Seat *seat, Arg *arg) {
   if(seat->focused != NULL) {
@@ -470,13 +485,174 @@ const struct river_window_manager_v1_listener window_manager_listener = {
   .seat = river_window_manager_v1_seat,
 };
 
+void river_input_manager_v1_finished(void *data, struct river_input_manager_v1 *river_input_manager_v1) {}
+void river_input_manager_v1_input_device(void *data, struct river_input_manager_v1 *river_input_manager_v1, struct river_input_device_v1 *id) {}
+
+const struct river_input_manager_v1_listener input_manager_listener = {
+  .finished = river_input_manager_v1_finished,
+  .input_device = river_input_manager_v1_input_device,
+};
+
+void river_input_device_v1_removed(void *data, struct river_input_device_v1 *river_input_device_v1) {}
+void river_input_device_v1_type(void *data, struct river_input_device_v1 *river_input_device_v1, uint32_t type) {}
+void river_input_device_v1_name(void *data, struct river_input_device_v1 *river_input_device_v1, const char *name) {}
+
+const struct river_input_device_v1_listener input_device_listener = {
+  .removed = river_input_device_v1_removed,
+  .type = river_input_device_v1_type,
+  .name = river_input_device_v1_name,
+};
+
+typedef struct {
+  struct river_xkb_keyboard_v1 *river_xkb_keyboard;
+
+  struct wl_list link;
+} Keyboard;
+
+void river_xkb_keyboard_v1_removed(void *data, struct river_xkb_keyboard_v1 *river_xkb_keyboard_v1) {
+  Keyboard *keyboard = data;
+
+  river_xkb_keyboard_v1_destroy(keyboard->river_xkb_keyboard);
+  wl_list_remove(&keyboard->link);
+  free(keyboard);
+}
+
+void river_xkb_keyboard_v1_input_device(void *data, struct river_xkb_keyboard_v1 *river_xkb_keyboard_v1, struct river_input_device_v1 *device) {}
+void river_xkb_keyboard_v1_layout(void *data, struct river_xkb_keyboard_v1 *river_xkb_keyboard_v1, uint32_t index, const char *name) {}
+void river_xkb_keyboard_v1_capslock_enabled(void *data, struct river_xkb_keyboard_v1 *river_xkb_keyboard_v1) {}
+void river_xkb_keyboard_v1_capslock_disabled(void *data, struct river_xkb_keyboard_v1 *river_xkb_keyboard_v1) {}
+void river_xkb_keyboard_v1_numlock_enabled(void *data, struct river_xkb_keyboard_v1 *river_xkb_keyboard_v1) {}
+void river_xkb_keyboard_v1_numlock_disabled(void *data, struct river_xkb_keyboard_v1 *river_xkb_keyboard_v1) {}
+
+const struct river_xkb_keyboard_v1_listener xkb_keyboard_listener = {
+  .removed = river_xkb_keyboard_v1_removed,
+  .input_device = river_xkb_keyboard_v1_input_device,
+  .layout = river_xkb_keyboard_v1_layout,
+  .capslock_enabled = river_xkb_keyboard_v1_capslock_enabled,
+  .capslock_disabled = river_xkb_keyboard_v1_capslock_disabled,
+  .numlock_enabled = river_xkb_keyboard_v1_numlock_enabled,
+  .numlock_disabled = river_xkb_keyboard_v1_numlock_disabled,
+};
+
+void river_xkb_config_v1_finished(void *data, struct river_xkb_config_v1 *river_xkb_config_v1) {
+  river_xkb_config_v1_destroy(river_xkb_config_v1);
+}
+
+void river_xkb_config_v1_xkb_keyboard(void *data, struct river_xkb_config_v1 *river_xkb_config_v1, struct river_xkb_keyboard_v1 *id) {
+  Keyboard *keyboard = calloc(1, sizeof(Keyboard));
+  keyboard->river_xkb_keyboard = id;
+
+  wl_list_insert(&anvl.keyboards, &keyboard->link);
+  river_xkb_keyboard_v1_add_listener(id, &xkb_keyboard_listener, keyboard);
+
+  if(xkb_keymap) {
+    river_xkb_keyboard_v1_set_keymap(keyboard->river_xkb_keyboard, xkb_keymap);
+  }
+}
+
+const struct river_xkb_config_v1_listener xkb_config_listener = {
+  .finished = river_xkb_config_v1_finished,
+  .xkb_keyboard = river_xkb_config_v1_xkb_keyboard,
+};
+
+// credit to https://git.sr.ht/~zuki/zrwm/tree/afc021dd91bba7a69b1f10fbbf8c5d7bfd66490a/item/zrwm.c#L636
+struct river_xkb_keymap_v1* create_keymap() {
+  struct xkb_rule_names keymap_rule_names = {0};
+  keymap_rule_names.layout = "us";
+
+  struct xkb_keymap *keymap = xkb_keymap_new_from_names2(xkb_context, &keymap_rule_names, XKB_KEYMAP_FORMAT_TEXT_V2, XKB_KEYMAP_COMPILE_NO_FLAGS);
+  if(keymap == NULL) {
+    fprintf(stderr, "Failed to create xkb keymap\n");
+    return NULL;
+  }
+
+  char *keymap_str = xkb_keymap_get_as_string2(keymap, XKB_KEYMAP_FORMAT_TEXT_V2, XKB_KEYMAP_SERIALIZE_NO_FLAGS);
+  xkb_keymap_unref(keymap);
+  int keymap_str_len = strlen(keymap_str) + 1;
+  int keymap_fd = memfd_create("anvl-keymap", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+  if(keymap_fd == -1 || ftruncate(keymap_fd, keymap_str_len) < 0) {
+    fprintf(stderr, "Failed to create or truncate mem fd\n");
+    close(keymap_fd);
+    free(keymap_str);
+    return NULL;
+  }
+
+  void *data = mmap(NULL, keymap_str_len, PROT_READ | PROT_WRITE, MAP_SHARED, keymap_fd, 0);
+  if(data == MAP_FAILED) {
+    fprintf(stderr, "Failed to map data\n");
+    close(keymap_fd);
+    free(keymap_str);
+    return NULL;
+  }
+
+  memcpy(data, keymap_str, keymap_str_len);
+  free(keymap_str);
+
+  if(munmap(data, keymap_str_len) < 0) {
+    fprintf(stderr, "Failed to unmap data\n");
+    close(keymap_fd);
+    free(keymap_str);
+    return NULL;
+  }
+
+  if(fcntl(keymap_fd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE | F_SEAL_SEAL) < 0) {
+    fprintf(stderr, "Failed to seal mem fd\n");
+    close(keymap_fd);
+    free(keymap_str);
+    return NULL;
+  }
+
+  return river_xkb_config_v1_create_keymap(xkb_config, keymap_fd, XKB_KEYMAP_FORMAT_TEXT_V2);
+}
+
+void river_xkb_keymap_v1_success(void *data, struct river_xkb_keymap_v1 *river_xkb_keymap_v1) {
+  Keyboard *keyboard;
+  wl_list_for_each(keyboard, &anvl.keyboards, link) {
+    river_xkb_keyboard_v1_set_keymap(keyboard->river_xkb_keyboard, xkb_keymap);
+  }
+
+  fprintf(stderr, "Successfully created keymap\n");
+}
+
+void river_xkb_keymap_v1_failure(void *data, struct river_xkb_keymap_v1 *river_xkb_keymap_v1, const char *error_msg) {
+  fprintf(stderr, "Failed to create keymap\n");
+}
+
+const struct river_xkb_keymap_v1_listener xkb_keymap_listener = {
+  .success = river_xkb_keymap_v1_success,
+  .failure = river_xkb_keymap_v1_failure,
+};
+
 void wl_registry_global(void *data, struct wl_registry *registry, uint32_t name, const char *interface, uint32_t version) {
-  if(strcmp(interface, river_window_manager_v1_interface.name) == 0 && version >= 4) {
+  if(strcmp(interface, river_window_manager_v1_interface.name) == 0) {
     window_manager = wl_registry_bind(registry, name, &river_window_manager_v1_interface, 4);
+    if(window_manager) {
+      river_window_manager_v1_add_listener(window_manager, &window_manager_listener, NULL);
+    }
   }
 
   if(strcmp(interface, river_xkb_bindings_v1_interface.name) == 0) {
     xkb_bindings = wl_registry_bind(registry, name, &river_xkb_bindings_v1_interface, 1);
+  }
+
+  if(strcmp(interface, river_input_manager_v1_interface.name) == 0) {
+    input_manager = wl_registry_bind(registry, name, &river_input_manager_v1_interface, 1);
+    if(input_manager != NULL) {
+      river_input_manager_v1_add_listener(input_manager, &input_manager_listener, NULL);
+    }
+  } 
+
+  if(strcmp(interface, river_xkb_config_v1_interface.name) == 0) {
+    xkb_config = wl_registry_bind(registry,name,&river_xkb_config_v1_interface, 1);
+    if(xkb_config) {
+      river_xkb_config_v1_add_listener(xkb_config, &xkb_config_listener, NULL);
+
+      fprintf(stderr, "Trying to create keymap\n");
+      xkb_keymap = create_keymap();
+      if(xkb_keymap) {
+        river_xkb_keymap_v1_add_listener(xkb_keymap, &xkb_keymap_listener, NULL);
+      }
+    }
   }
 }
 
@@ -488,6 +664,8 @@ const struct wl_registry_listener registry_listener = {
 };
 
 int main() {
+  xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+
   struct wl_display *display = wl_display_connect(NULL);
   if(display == NULL) {
     fprintf(stderr, "failed to connect to Wayland server\n");
@@ -508,11 +686,10 @@ int main() {
     return 1;
   }
 
+  wl_list_init(&anvl.keyboards);
   wl_list_init(&anvl.windows);
   wl_list_init(&anvl.outputs);
   wl_list_init(&anvl.seats);
-
-  river_window_manager_v1_add_listener(window_manager, &window_manager_listener, NULL);
 
   while(true) {
     if(wl_display_dispatch(display) < 0) {

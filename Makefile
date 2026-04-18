@@ -3,7 +3,7 @@ MAIN_FILE := anvl
 SRC_DIR := src
 BUILD_DIR := .build
 
-FLAGS := -std=c23 -D_POSIX_C_SOURCE=202405L -I $(BUILD_DIR) $(shell pkg-config --cflags --libs xkbcommon wayland-client)
+FLAGS := -std=c23 -I $(BUILD_DIR) $(shell pkg-config --cflags --libs xkbcommon wayland-client)
 
 PROTO_OBJS := $(patsubst protocol/%.xml, $(BUILD_DIR)/%-protocol.o, $(shell fd -e xml . protocol))
 PROTO_HEADERS := $(patsubst protocol/%.xml, $(BUILD_DIR)/%-client-protocol.h, $(shell fd -e xml . protocol))
