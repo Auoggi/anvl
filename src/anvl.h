@@ -15,6 +15,7 @@
 
 typedef struct Window Window;
 typedef struct Output Output;
+typedef struct Layout Layout;
 typedef struct Seat Seat;
 
 struct Window {
@@ -47,6 +48,8 @@ struct Output {
 
   uint32_t seltag;
   uint32_t tagmask;
+
+  Layout *lt;
 };
 
 struct Seat {
@@ -65,6 +68,11 @@ typedef struct {
   struct wl_list seats;
   struct wl_list keyboards;
 } WindowManager;
+
+struct Layout {
+  char *symbol;
+  void (*manage)(Output*);
+};
 
 typedef union {
   int i;
@@ -116,5 +124,9 @@ void view(Seat *seat, Arg *arg);
 void toggleview(Seat *seat, Arg *arg);
 void tag(Seat *seat, Arg *arg);
 void toggletag(Seat *seat, Arg *arg);
+void setlayout(Seat *seat, Arg *arg);
+
+void tile(Output *output);
+void monocle(Output *output);
 
 #endif /* ANVLH */

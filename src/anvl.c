@@ -137,6 +137,11 @@ void toggletag(Seat *seat, Arg *arg) {
   }
 }
 
+void setlayout(Seat *seat, Arg *arg) {
+  if(seat->focused != NULL) {
+    seat->focused->mon->lt = arg->v;
+  }
+}
 
 void exit_session(Seat *seat, Arg *arg) {
   river_window_manager_v1_exit_session(window_manager);
@@ -405,14 +410,48 @@ void river_window_manager_v1_finished(void *data, struct river_window_manager_v1
   exit(0);
 }
 
-int count_visible_windows(Output *output) {
-  int c = 0;
+void tile(Output *output) {
+  int n = 0, h, ly = 0, ry = 0, w;
+
   Window *window;
   wl_list_for_each(window, &anvl.windows, link) {
-    if(window->mon == output && ISVISIBLE(window)) c++;
+    if(window->mon == output && ISVISIBLE(window)) n++;
   }
 
-  return c;
+  if(n > output->nmaster && output->nmaster != 0) w = output->width * output->mfact;
+  else w = output->width;
+
+  int i = 0;
+  wl_list_for_each(window, &anvl.windows, link) {
+    if(window->mon == output && ISVISIBLE(window)) {
+      river_window_v1_show(window->river_window);
+
+      if(i < output->nmaster || output->nmaster == 0) {
+        window_set_position(window, 0, ly);
+        h = (output->height - ly) / (MIN(n, output->nmaster) - i);
+        ly += h;
+        window_set_dimensions(window, w, h);
+      } else {
+        window_set_position(window, w, ry);
+        h = (output->height - ry) / (n - i);
+        ry += h;
+        window_set_dimensions(window, output->width - w, h);
+      }
+
+      i++;
+    }
+  }
+}
+
+void monocle(Output *output) {
+  Window *window;
+  wl_list_for_each(window, &anvl.windows, link) {
+    if(window->mon == output && ISVISIBLE(window)) {
+      river_window_v1_show(window->river_window);
+      window_set_position(window, 0, 0);
+      window_set_dimensions(window, output->width, output->height);
+    }
+  }
 }
 
 void river_window_manager_v1_manage_start(void *data, struct river_window_manager_v1 *obj) {
@@ -423,42 +462,7 @@ void river_window_manager_v1_manage_start(void *data, struct river_window_manage
 
   Output *output;
   wl_list_for_each(output, &anvl.outputs, link) {
-    int i = 0;
-    int n = count_visible_windows(output);
-    int m = output->nmaster;
-
-    Window *prev;
-    wl_list_for_each(window, &anvl.windows, link) {
-      if(window->mon == output && ISVISIBLE(window)) {
-        river_window_v1_show(window->river_window);
-        // river_window_v1_use_ssd(window->river_window);
-        // river_window_v1_set_tiled(window->river_window, 15);
-
-        bool two = m < n && m != 0;
-
-        int si = i < m ? i : i - m;
-        int div = two ? (i < m ? m : n - m) : n;
-        int even = si % 2 == 0;
-        int height = (even ? output->height / div : (output->height + (div - 1)) / div);
-
-        float mfact = two ? output->mfact : 1;
-
-        window_set_position(window, 0, 0);
-        window_set_dimensions(window, output->width*mfact, height);
-
-        if(two && i >= m) {
-          window_set_position(window, window->width, 0);
-          window_set_dimensions(window, output->width - (window->width), window->height);
-        }
-        
-        if(si != 0) {
-          window_set_position(window, window->x, prev->y + prev->height);
-        }
-
-        prev = window;
-        i++;
-      }
-    }
+    output->lt->manage(output);
   }
 
   Seat *seat;
@@ -512,6 +516,7 @@ void river_window_manager_v1_output(void *data, struct river_window_manager_v1 *
   output->mfact = 0.5f;
   output->seltag = 1;
   output->tagmask = 1;
+  output->lt = &layouts[0];
 
   river_output_v1_add_listener(output->river_output, &output_listener, output);
   wl_list_insert(&anvl.outputs, &output->link);
