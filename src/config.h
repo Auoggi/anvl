@@ -15,8 +15,10 @@ const char *footcmd[] = { "foot", NULL };
 Keys keybinds[] = {
   {SUPER,         XKB_KEY_period, select_next_mon, {0} },
   {SUPER,         XKB_KEY_comma,  select_prev_mon, {0} },
-  {SUPER,         XKB_KEY_n,      focus_next,      {0} },
-  {SUPER|SHIFT,   XKB_KEY_n,      focus_prev,      {0} },
+  // {SUPER,         XKB_KEY_n,      focus_next,      {0} },
+  // {SUPER|SHIFT,   XKB_KEY_n,      focus_prev,      {0} },
+  {SUPER,         XKB_KEY_j,      focus_prev,      {0} },
+  {SUPER,         XKB_KEY_k,      focus_next,      {0} },
   {SUPER|CONTROL, XKB_KEY_c,      destroy_window,  {0} },
   {SUPER|SHIFT,   XKB_KEY_q,      exit_session,    {0} },
   {SUPER,         XKB_KEY_i,      incnmaster,      { .i = +1 } },

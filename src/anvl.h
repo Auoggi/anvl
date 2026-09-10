@@ -28,9 +28,6 @@ struct Window {
   int width;
   int height;
 
-  bool focused;
-  bool hovered;
-
   Output *mon;
   uint32_t tagmask;
 };
@@ -57,7 +54,6 @@ struct Seat {
   struct wl_list link;
 
   Window *focused;
-  Window *hovered;
 
   struct wl_list keys;
   struct wl_list buttons;

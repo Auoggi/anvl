@@ -41,6 +41,7 @@ void destroy_window(Seat *seat, Arg *arg) {
   }
 }
 
+// TODO: Focus first window of mon
 void select_next_mon(Seat *seat, Arg *arg) {
   if(selmon != NULL) {
     Output *next = wl_container_of(selmon->link.next, selmon, link);
@@ -51,6 +52,7 @@ void select_next_mon(Seat *seat, Arg *arg) {
   }
 }
 
+// TODO: Focus first window of mon
 void select_prev_mon(Seat *seat, Arg *arg) {
   if(selmon != NULL) {
     Output *prev = wl_container_of(selmon->link.prev, selmon, link);
@@ -61,6 +63,7 @@ void select_prev_mon(Seat *seat, Arg *arg) {
   }
 }
 
+// TODO: loop and only through windows on selmon
 void focus_next(Seat *seat, Arg *arg) {
   if(seat->focused != NULL) {
     Window *next = wl_container_of(seat->focused->link.next, seat->focused, link);
@@ -71,6 +74,7 @@ void focus_next(Seat *seat, Arg *arg) {
   }
 }
 
+// TODO: loop and only through windows on selmon
 void focus_prev(Seat *seat, Arg *arg) {
   if(seat->focused != NULL) {
     Window *prev = wl_container_of(seat->focused->link.prev, seat->focused, link);
@@ -335,27 +339,18 @@ void river_seat_v1_pointer_enter(void *data, struct river_seat_v1 *obj, struct r
   Seat *seat = data;
   Window *window = river_window_v1_get_user_data(river_window);
 
-  seat->hovered = window;
-  window->hovered = true;
+  seat->focused = window;
 }
 
-void river_seat_v1_pointer_leave(void *data, struct river_seat_v1 *obj) {
-  Seat *seat = data;
-  Window *window = seat->hovered;
-
-  seat->hovered = NULL;
-  window->hovered = false;
-}
+void river_seat_v1_pointer_leave(void *data, struct river_seat_v1 *obj) {}
 
 void river_seat_v1_window_interaction(void *data, struct river_seat_v1 *obj, struct river_window_v1 *river_window) {
   Seat *seat = data;
   Window *window = seat->focused;
 
-  if(window != NULL) window->focused = false;
   window = river_window_v1_get_user_data(river_window);
 
   seat->focused = window;
-  window->focused = true;
 }
 
 void river_seat_v1_shell_surface_interaction(void *data, struct river_seat_v1 *obj, struct river_shell_surface_v1 *river_shell_surface) {}
@@ -436,8 +431,8 @@ void river_window_manager_v1_manage_start(void *data, struct river_window_manage
     wl_list_for_each(window, &anvl.windows, link) {
       if(window->mon == output && ISVISIBLE(window)) {
         river_window_v1_show(window->river_window);
-        river_window_v1_use_ssd(window->river_window);
-        river_window_v1_set_tiled(window->river_window, 15);
+        // river_window_v1_use_ssd(window->river_window);
+        // river_window_v1_set_tiled(window->river_window, 15);
 
         bool two = m < n && m != 0;
 
@@ -486,13 +481,11 @@ void river_window_manager_v1_render_start(void *data, struct river_window_manage
 void river_window_manager_v1_session_locked(void *data, struct river_window_manager_v1 *obj) {}
 void river_window_manager_v1_session_unlocked(void *data, struct river_window_manager_v1 *obj) {}
 
-// TODO: Add window to end of list or reverse render order, and autofocus newly created windows
+// TODO: Add window after focused window, instead of at the very start
 void river_window_manager_v1_window(void *data, struct river_window_manager_v1 *obj, struct river_window_v1 *river_window) {
   Window *window = calloc(1, sizeof(Window));
   window->river_window = river_window;
   window->river_node = river_window_v1_get_node(window->river_window);
-  window->hovered = false;
-  window->focused = false;
   window->mon = selmon;
   window->tagmask = selmon->seltag;
 
@@ -503,7 +496,13 @@ void river_window_manager_v1_window(void *data, struct river_window_manager_v1 *
   river_window_v1_set_tiled(window->river_window, 15);
 
   window_set_position(window, 0, 0);
-  window_set_dimensions(window, window->mon->width, window->mon->width);
+  window_set_dimensions(window, 0, 0);
+
+  // Focus new window on all seats
+  Seat *seat;
+  wl_list_for_each(seat, &anvl.seats, link) {
+    seat->focused = window;
+  }
 }
 
 void river_window_manager_v1_output(void *data, struct river_window_manager_v1 *obj, struct river_output_v1 *river_output) {
@@ -524,7 +523,6 @@ void river_window_manager_v1_seat(void *data, struct river_window_manager_v1 *ob
   Seat *seat = calloc(1, sizeof(Seat));
   seat->river_seat = river_seat;
   seat->focused = NULL;
-  seat->hovered = NULL;
 
   wl_list_init(&seat->keys);
   wl_list_init(&seat->buttons);
