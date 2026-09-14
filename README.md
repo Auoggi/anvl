@@ -16,6 +16,8 @@ At this time, the window manager is not stable, so expect bugs and crashes.
 - pkgconfig
 - wayland
 - xkbcommon
+- pixman
+- fcft
 
 ## Additional Runtime Dependencies
 

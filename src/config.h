@@ -1,6 +1,8 @@
 #include "anvl.h"
 
-Layout layouts[] = {
+static const char *font = "monospace:size=12";
+
+static Layout layouts[] = {
   { "[]=", tile }, // First entry is default
   { "[M]", monocle },
 };
@@ -15,9 +17,9 @@ Layout layouts[] = {
   {SUPER|SHIFT,         KEY, tag,        { .u = 1 << TAG } }, \
   {SUPER|SHIFT|CONTROL, KEY, toggletag,  { .u = 1 << TAG } },
 
-const char *termcmd[] = { "foot", NULL };
+static const char *termcmd[] = { "foot", NULL };
 
-Keys keybinds[] = {
+static Keys keybinds[] = {
   {SUPER,         XKB_KEY_period, select_next_mon, {0} },
   {SUPER,         XKB_KEY_comma,  select_prev_mon, {0} },
   {SUPER|CONTROL, XKB_KEY_c,      destroy_window,  {0} },

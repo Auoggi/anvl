@@ -9,12 +9,16 @@
 #include <xkbcommon/xkbcommon-keysyms.h>
 
 #include <river-xkb-config-v1-client-protocol.h>
+#include <river-layer-shell-v1-client-protocol.h>
 #include <river-xkb-bindings-v1-client-protocol.h>
 #include <river-input-management-v1-client-protocol.h>
 #include <river-window-management-v1-client-protocol.h>
 
+#include <wlr-layer-shell-unstable-v1-client-protocol.h>
+
 typedef struct Window Window;
 typedef struct Output Output;
+typedef struct WlOutput WlOutput;
 typedef struct Layout Layout;
 typedef struct Seat Seat;
 
@@ -35,6 +39,7 @@ struct Window {
 
 struct Output {
   struct river_output_v1 *river_output;
+  struct river_layer_shell_output_v1 *river_layer_shell;
   struct wl_list link;
 
   int x;
@@ -52,6 +57,17 @@ struct Output {
   Layout *lt;
 };
 
+struct WlOutput{
+  struct wl_output *wl_output;
+  struct wl_list link;
+
+  int width;
+  int height;
+
+  struct wl_surface *surface;
+  struct zwlr_layer_surface_v1 *layer_surface;
+};
+
 struct Seat {
   struct river_seat_v1 *river_seat;
   struct wl_list link;
@@ -67,6 +83,7 @@ typedef struct {
   struct wl_list outputs;
   struct wl_list seats;
   struct wl_list keyboards;
+  struct wl_list wl_outputs;
 } WindowManager;
 
 struct Layout {

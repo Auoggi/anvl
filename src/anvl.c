@@ -12,10 +12,14 @@
 #include <stdlib.h>
 #include <stdbool.h>
 
+#include <time.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <string.h>
 #include <unistd.h>
+
+#include <fcft/fcft.h>
 
 #include "anvl.h"
 
@@ -28,9 +32,16 @@
 WindowManager anvl;
 Output *selmon = NULL;
 
+struct wl_shm *shm;
+struct wl_compositor *wl_compositor;
+struct zwlr_layer_shell_v1 *zwlr_layer_shell;
+
+struct fcft_font *fcft_font = NULL;
+
 struct xkb_context *xkb_context;
 struct river_xkb_config_v1 *xkb_config;
 struct river_xkb_keymap_v1 *xkb_keymap;
+struct river_layer_shell_v1 *layer_shell;
 struct river_xkb_bindings_v1 *xkb_bindings;
 struct river_input_manager_v1 *input_manager;
 struct river_window_manager_v1 *window_manager;
@@ -47,6 +58,7 @@ void select_next_mon(Seat *seat, Arg *arg) {
     Output *next = wl_container_of(selmon->link.next, selmon, link);
     if(next != NULL && &next->link != &anvl.outputs) {
       selmon = next;
+      river_layer_shell_output_v1_set_default(selmon->river_layer_shell);
       river_seat_v1_pointer_warp(seat->river_seat, selmon->x + selmon->width/2, selmon->y + selmon->height/2);
     }
   }
@@ -58,6 +70,7 @@ void select_prev_mon(Seat *seat, Arg *arg) {
     Output *prev = wl_container_of(selmon->link.prev, selmon, link);
     if(prev != NULL && &prev->link != &anvl.outputs) {
       selmon = prev;
+      river_layer_shell_output_v1_set_default(selmon->river_layer_shell);
       river_seat_v1_pointer_warp(seat->river_seat, selmon->x + selmon->width/2, selmon->y + selmon->height/2);
     }
   }
@@ -85,6 +98,7 @@ void focus_prev(Seat *seat, Arg *arg) {
   }
 }
 
+// TODO: maybe use selmon instead here
 void incnmaster(Seat *seat, Arg *arg) {
   if(seat->focused != NULL) {
     seat->focused->mon->nmaster += arg->i;
@@ -138,8 +152,8 @@ void toggletag(Seat *seat, Arg *arg) {
 }
 
 void setlayout(Seat *seat, Arg *arg) {
-  if(seat->focused != NULL) {
-    seat->focused->mon->lt = arg->v;
+  if(selmon != NULL) {
+    selmon->lt = arg->v;
   }
 }
 
@@ -157,6 +171,7 @@ void spawn(Seat *seat, Arg *arg) {
 void river_output_v1_removed(void *data, struct river_output_v1 *obj) {
   Output *output = data;
 
+  river_layer_shell_output_v1_destroy(output->river_layer_shell);
   river_output_v1_destroy(output->river_output);
   wl_list_remove(&output->link);
   free(output);
@@ -289,11 +304,15 @@ void xkb_binding_destroy(Key *key) {
 }
 
 void river_pointer_binding_v1_pressed(void *data, struct river_pointer_binding_v1 *obj) {
-  ((Button*) data)->pressed = true;
+  Button *button = data;
+
+  button->pressed = true;
 }
 
 void river_pointer_binding_v1_released(void *data, struct river_pointer_binding_v1 *obj) {
-  ((Button*) data)->pressed = false;
+  Button *button = data;
+
+  button->pressed = false;
 }
 
 const struct river_pointer_binding_v1_listener pointer_binding_listener = {
@@ -367,10 +386,11 @@ void river_seat_v1_pointer_position(void *data, struct river_seat_v1 *obj, int32
   wl_list_for_each(output, &anvl.outputs, link) {
     if(x >= output->x && x < output->x + output->width && y >= output->y && y < output->y + output->height) {
       selmon = output;
+      river_layer_shell_output_v1_set_default(output->river_layer_shell);
       return;
     }
   }
-  
+
   selmon = NULL;
 }
 
@@ -386,6 +406,12 @@ const struct river_seat_v1_listener seat_listener = {
   .pointer_position = river_seat_v1_pointer_position,
 };
 
+void river_layer_shell_output_v1_non_exclusive_area(void *data, struct river_layer_shell_output_v1 *handle, int32_t x, int32_t y, int32_t width, int32_t height) {}
+
+const struct river_layer_shell_output_v1_listener layer_shell_output_listener = {
+  .non_exclusive_area = river_layer_shell_output_v1_non_exclusive_area,
+};
+
 void manage_seat(Seat *seat) {
   if(seat->focused == NULL && !wl_list_empty(&anvl.windows)) {
     seat->focused = wl_container_of(anvl.windows.prev, seat->focused, link);
@@ -399,8 +425,6 @@ void manage_seat(Seat *seat) {
   }
 }
 
-void render_seat(Seat *seat) {}
-
 void river_window_manager_v1_unavailable(void *data, struct river_window_manager_v1 *obj) {
   fprintf(stderr, "error: Unavailable.\n");
   exit(1);
@@ -411,14 +435,15 @@ void river_window_manager_v1_finished(void *data, struct river_window_manager_v1
 }
 
 void tile(Output *output) {
-  int n = 0, h, ly = 0, ry = 0, w;
+  int m, n = 0, h, ly = 20, ry = 20, w; // TODO: handle rendering below bar better
 
   Window *window;
   wl_list_for_each(window, &anvl.windows, link) {
     if(window->mon == output && ISVISIBLE(window)) n++;
   }
 
-  if(n > output->nmaster && output->nmaster != 0) w = output->width * output->mfact;
+  m = output->nmaster != 0 ? output->nmaster : n;
+  if(n > m) w = output->width * output->mfact;
   else w = output->width;
 
   int i = 0;
@@ -426,9 +451,9 @@ void tile(Output *output) {
     if(window->mon == output && ISVISIBLE(window)) {
       river_window_v1_show(window->river_window);
 
-      if(i < output->nmaster || output->nmaster == 0) {
+      if(i < m) {
         window_set_position(window, 0, ly);
-        h = (output->height - ly) / (MIN(n, output->nmaster) - i);
+        h = (output->height - ly) / (MIN(n, m) - i);
         ly += h;
         window_set_dimensions(window, w, h);
       } else {
@@ -448,7 +473,7 @@ void monocle(Output *output) {
   wl_list_for_each(window, &anvl.windows, link) {
     if(window->mon == output && ISVISIBLE(window)) {
       river_window_v1_show(window->river_window);
-      window_set_position(window, 0, 0);
+      window_set_position(window, 0, 20); // TODO: handle rendering below bar better
       window_set_dimensions(window, output->width, output->height);
     }
   }
@@ -473,10 +498,128 @@ void river_window_manager_v1_manage_start(void *data, struct river_window_manage
   river_window_manager_v1_manage_finish(window_manager);
 }
 
+// https://wayland-book.com/surfaces/shared-memory.html
+// ---
+void randname(char *buf) {
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  long r = ts.tv_nsec;
+  for (int i = 0; i < 6; ++i) {
+    buf[i] = 'A'+(r&15)+(r&16)*2;
+    r >>= 5;
+  }
+}
+
+int create_shm_file(void) {
+  int retries = 100;
+  do {
+    char name[] = "/wl_shm-XXXXXX";
+    randname(name + sizeof(name) - 7);
+    --retries;
+    int fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
+    if(fd >= 0) {
+      shm_unlink(name);
+      return fd;
+    }
+  } while (retries > 0 && errno == EEXIST);
+  return -1;
+}
+
+int allocate_shm_file(size_t size) {
+  int fd = create_shm_file();
+  if(fd < 0) return -1;
+
+  int ret;
+  do {
+    ret = ftruncate(fd, size);
+  } while (ret < 0 && errno == EINTR);
+
+  if(ret < 0) {
+    close(fd);
+    return -1;
+  }
+  return fd;
+}
+// ---
+
+static pixman_color_t fg = {0xEE00, 0xEE00, 0xEE00, 0xffff};
+static pixman_color_t bg = {0x2200, 0x2200, 0x2200, 0xffff};
+
+void render_bar(WlOutput *output) {
+  int w = output->width, h = 20;
+
+  uint32_t stride = w * 4;
+  int shm_pool_size = h * stride;
+
+  int fd = allocate_shm_file(shm_pool_size);
+  uint8_t *pool_data = mmap(NULL, shm_pool_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+
+  struct wl_shm_pool *pool = wl_shm_create_pool(shm, fd, shm_pool_size);
+  struct wl_buffer *buf = wl_shm_pool_create_buffer(pool, 0, w, h, stride, WL_SHM_FORMAT_ARGB8888);
+
+  pixman_image_t *pix = NULL;
+  pix = pixman_image_create_bits_no_clear(PIXMAN_a8r8g8b8, w, h, (void*) pool_data, stride);
+  if(pix == NULL) {
+    fprintf(stderr, "error: failed to create pixman image\n");
+    return;
+  }
+
+  pixman_image_fill_rectangles(PIXMAN_OP_SRC, pix, &bg, 1, (pixman_rectangle16_t []){{0, 0, w, h}});
+
+  pixman_image_t *clr_pix = pixman_image_create_solid_fill(&fg);
+
+  char *text = "hello world";
+  const struct fcft_glyph *glyphs[11];
+  long kern[11];
+  int text_width = 0;
+
+  for(size_t i = 0; i < 11; i++) {
+    glyphs[i] = fcft_rasterize_char_utf32(fcft_font, text[i], FCFT_SUBPIXEL_DEFAULT);
+    if(glyphs[i] == NULL) continue;
+
+    kern[i] = 0;
+    if(i > 0) {
+      long x_kern;
+      if(fcft_kerning(fcft_font, text[i - 1], text[i], &x_kern, NULL)) kern[i] = x_kern;
+    }
+
+    text_width += kern[i] + glyphs[i]->advance.x;
+  }
+
+  int x = 5, y = (20 - fcft_font->height) / 2;
+  for(size_t i = 0; i < 11; i++) {
+    const struct fcft_glyph *g = glyphs[i];
+    if(g == NULL) continue;
+
+    x += kern[i];
+
+    if(g->is_color_glyph) {
+      pixman_image_composite32(PIXMAN_OP_OVER, g->pix, NULL, pix, 0, 0, 0, 0, x + g->x, y + fcft_font->ascent - g->y, g->width, g->height);
+    } else {
+      pixman_image_composite32(PIXMAN_OP_OVER, clr_pix, g->pix, pix, 0, 0, 0, 0, x + g->x, y + fcft_font->ascent - g->y, g->width, g->height);
+    }
+
+    x += g->advance.x;
+  }
+
+  pixman_image_unref(clr_pix);
+
+  wl_surface_attach(output->surface, buf, 0, 0);
+  wl_surface_damage(output->surface, 0, 0, w, h);
+  wl_surface_commit(output->surface);
+
+  wl_shm_pool_destroy(pool); pool = NULL;
+  close(fd); fd = -1;
+
+  pixman_image_unref(pix);
+  wl_buffer_destroy(buf);
+  munmap(pool_data, shm_pool_size);
+}
+
 void river_window_manager_v1_render_start(void *data, struct river_window_manager_v1 *obj) {
-  Seat *seat;
-  wl_list_for_each(seat, &anvl.seats, link) {
-    render_seat(seat);
+  WlOutput *output;
+  wl_list_for_each(output, &anvl.wl_outputs, link) {
+    render_bar(output);
   }
 
   river_window_manager_v1_render_finish(window_manager);
@@ -509,9 +652,33 @@ void river_window_manager_v1_window(void *data, struct river_window_manager_v1 *
   }
 }
 
+void zwlr_layer_surface_v1_configure(void *data, struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1, uint32_t serial, uint32_t width, uint32_t height) {
+  WlOutput *output = data;
+
+  zwlr_layer_surface_v1_ack_configure(zwlr_layer_surface_v1, serial);
+
+
+  if(output->width == width && output->height == height) {
+      wl_surface_commit(output->surface);
+      return;
+  }
+
+  output->width = width;
+  output->height = height;
+  render_bar(output);
+}
+
+void zwlr_layer_surface_v1_closed(void *data, struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1) {}
+
+const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
+  .configure = zwlr_layer_surface_v1_configure,
+  .closed = zwlr_layer_surface_v1_closed,
+};
+
 void river_window_manager_v1_output(void *data, struct river_window_manager_v1 *obj, struct river_output_v1 *river_output) {
   Output *output = calloc(1, sizeof(Output));
   output->river_output = river_output;
+  output->river_layer_shell = river_layer_shell_v1_get_output(layer_shell, river_output);
   output->nmaster = 1;
   output->mfact = 0.5f;
   output->seltag = 1;
@@ -519,9 +686,13 @@ void river_window_manager_v1_output(void *data, struct river_window_manager_v1 *
   output->lt = &layouts[0];
 
   river_output_v1_add_listener(output->river_output, &output_listener, output);
+  river_layer_shell_output_v1_add_listener(output->river_layer_shell, &layer_shell_output_listener, output);
   wl_list_insert(&anvl.outputs, &output->link);
 
-  if(selmon == NULL) selmon = output;
+  if(selmon == NULL) {
+    selmon = output;
+    river_layer_shell_output_v1_set_default(output->river_layer_shell);
+  }
 }
 
 void river_window_manager_v1_seat(void *data, struct river_window_manager_v1 *obj, struct river_seat_v1 *river_seat) {
@@ -677,8 +848,6 @@ void river_xkb_keymap_v1_success(void *data, struct river_xkb_keymap_v1 *river_x
   wl_list_for_each(keyboard, &anvl.keyboards, link) {
     river_xkb_keyboard_v1_set_keymap(keyboard->river_xkb_keyboard, xkb_keymap);
   }
-
-  fprintf(stderr, "Successfully created keymap\n");
 }
 
 void river_xkb_keymap_v1_failure(void *data, struct river_xkb_keymap_v1 *river_xkb_keymap_v1, const char *error_msg) {
@@ -688,6 +857,53 @@ void river_xkb_keymap_v1_failure(void *data, struct river_xkb_keymap_v1 *river_x
 const struct river_xkb_keymap_v1_listener xkb_keymap_listener = {
   .success = river_xkb_keymap_v1_success,
   .failure = river_xkb_keymap_v1_failure,
+};
+
+void wl_output_geometry(void *data, struct wl_output *wl_output, int32_t x, int32_t y, int32_t physical_width, int32_t physical_height,
+    int32_t subpixel, const char *make, const char *model, int32_t transform) {}
+
+void wl_output_mode(void *data, struct wl_output *wl_output, uint32_t flags, int32_t width, int32_t height, int32_t refresh) {
+  if((flags & WL_OUTPUT_MODE_CURRENT) == 0) return;
+
+  WlOutput *output = data;
+  output->width = width;
+  output->height = height;
+}
+
+void wl_output_done(void *data, struct wl_output *wl_output) {
+  WlOutput *output = data;
+
+  output->surface = wl_compositor_create_surface(wl_compositor);
+
+  struct wl_region *input_region = wl_compositor_create_region(wl_compositor);
+  wl_surface_set_input_region(output->surface, input_region);
+  wl_region_destroy(input_region);
+
+  // Layer set to 1 so fullscreen windows will render above it
+  output->layer_surface = zwlr_layer_shell_v1_get_layer_surface(zwlr_layer_shell, output->surface, output->wl_output, 1, "bar");
+
+  zwlr_layer_surface_v1_set_size(output->layer_surface, output->width, 20);
+  zwlr_layer_surface_v1_set_anchor(output->layer_surface,
+      ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
+      ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT |
+      ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT);
+  zwlr_layer_surface_v1_set_exclusive_zone(output->layer_surface, -1);
+
+  zwlr_layer_surface_v1_add_listener(output->layer_surface, &layer_surface_listener, output);
+  wl_surface_commit(output->surface);
+}
+
+void wl_output_scale(void *data, struct wl_output *wl_output, int32_t factor) {}
+void wl_output_name(void *data, struct wl_output *wl_output, const char *name) {}
+void wl_output_description(void *data, struct wl_output *wl_output, const char *description) {}
+
+const struct wl_output_listener wl_output_listener = {
+  .geometry = wl_output_geometry,
+  .mode = wl_output_mode,
+  .done = wl_output_done,
+  .scale = wl_output_scale,
+  .name = wl_output_name,
+  .description = wl_output_description,
 };
 
 void wl_registry_global(void *data, struct wl_registry *registry, uint32_t name, const char *interface, uint32_t version) {
@@ -707,19 +923,41 @@ void wl_registry_global(void *data, struct wl_registry *registry, uint32_t name,
     if(input_manager != NULL) {
       river_input_manager_v1_add_listener(input_manager, &input_manager_listener, NULL);
     }
-  } 
+  }
 
   if(strcmp(interface, river_xkb_config_v1_interface.name) == 0) {
     xkb_config = wl_registry_bind(registry,name,&river_xkb_config_v1_interface, 1);
     if(xkb_config) {
       river_xkb_config_v1_add_listener(xkb_config, &xkb_config_listener, NULL);
 
-      fprintf(stderr, "Trying to create keymap\n");
       xkb_keymap = create_keymap();
       if(xkb_keymap) {
         river_xkb_keymap_v1_add_listener(xkb_keymap, &xkb_keymap_listener, NULL);
       }
     }
+  }
+
+  if(strcmp(interface, wl_output_interface.name) == 0) {
+    WlOutput *output = calloc(1, sizeof(WlOutput));
+    output->wl_output = wl_registry_bind(registry, name, &wl_output_interface, 4);
+    wl_output_add_listener(output->wl_output, &wl_output_listener, output);
+    wl_list_insert(&anvl.wl_outputs, &output->link);
+  }
+
+  if(strcmp(interface, river_layer_shell_v1_interface.name) == 0) {
+    layer_shell = wl_registry_bind(registry, name, &river_layer_shell_v1_interface, 1);
+  }
+
+  if(strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
+    zwlr_layer_shell = wl_registry_bind(registry, name, &zwlr_layer_shell_v1_interface, 1);
+  }
+
+  if(strcmp(interface, wl_compositor_interface.name) == 0) {
+    wl_compositor = wl_registry_bind(registry, name, &wl_compositor_interface, version);
+  }
+
+  if(strcmp(interface, wl_shm_interface.name) == 0) {
+    shm = wl_registry_bind(registry, name, &wl_shm_interface, 1);
   }
 }
 
@@ -741,6 +979,21 @@ int main() {
 
   signal(SIGCHLD, SIG_IGN);
 
+  wl_list_init(&anvl.wl_outputs);
+  wl_list_init(&anvl.keyboards);
+  wl_list_init(&anvl.windows);
+  wl_list_init(&anvl.outputs);
+  wl_list_init(&anvl.seats);
+
+  const char *name[] = { font };
+  fcft_init(FCFT_LOG_COLORIZE_AUTO, false, FCFT_LOG_CLASS_DEBUG);
+  fcft_font = fcft_from_name2(1, name, NULL, NULL);
+
+  if(fcft_font == NULL) {
+    fprintf(stderr, "font failed\n");
+    return 1;
+  }
+
   struct wl_registry *registry = wl_display_get_registry(display);
   wl_registry_add_listener(registry, &registry_listener, NULL);
   if(wl_display_roundtrip(display) < 0) {
@@ -753,17 +1006,14 @@ int main() {
     return 1;
   }
 
-  wl_list_init(&anvl.keyboards);
-  wl_list_init(&anvl.windows);
-  wl_list_init(&anvl.outputs);
-  wl_list_init(&anvl.seats);
-
   while(true) {
     if(wl_display_dispatch(display) < 0) {
       fprintf(stderr, "dispatch failed\n");
       return 1;
     }
   }
+
+  fcft_destroy(fcft_font);
 
   return 0;
 }
