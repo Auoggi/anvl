@@ -1,5 +1,5 @@
 #ifndef ANVLH
-#define ANVLH 
+#define ANVLH
 
 #include <wayland-client-core.h>
 #include <wayland-client-protocol.h>
@@ -61,8 +61,13 @@ struct WlOutput{
   struct wl_output *wl_output;
   struct wl_list link;
 
+  Output *output;
+
   int width;
   int height;
+
+  bool done;
+  uint32_t name;
 
   struct wl_surface *surface;
   struct zwlr_layer_surface_v1 *layer_surface;

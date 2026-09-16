@@ -2,6 +2,8 @@
 
 static const char *font = "monospace:size=12";
 
+static const char *tags[] = { "1", "2", "3", "4", "5", "6", "7", "8", "9" };
+
 static Layout layouts[] = {
   { "[]=", tile }, // First entry is default
   { "[M]", monocle },

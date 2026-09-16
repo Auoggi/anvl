@@ -177,7 +177,17 @@ void river_output_v1_removed(void *data, struct river_output_v1 *obj) {
   free(output);
 }
 
-void river_output_v1_wl_output(void *data, struct river_output_v1 *obj, uint32_t name) {}
+void river_output_v1_wl_output(void *data, struct river_output_v1 *obj, uint32_t name) {
+  Output *output = data;
+
+  WlOutput *wl_output;
+  wl_list_for_each(wl_output, &anvl.wl_outputs, link) {
+    if(wl_output->name == name) {
+      wl_output->output = output;
+      wl_output->done = true;
+    }
+  }
+}
 
 void river_output_v1_position(void *data, struct river_output_v1 *obj, int32_t x, int32_t y) {
   Output *output = data;
@@ -412,6 +422,8 @@ const struct river_layer_shell_output_v1_listener layer_shell_output_listener = 
   .non_exclusive_area = river_layer_shell_output_v1_non_exclusive_area,
 };
 
+const struct wl_callback_listener wl_surface_frame_listener;
+
 void manage_seat(Seat *seat) {
   if(seat->focused == NULL && !wl_list_empty(&anvl.windows)) {
     seat->focused = wl_container_of(anvl.windows.prev, seat->focused, link);
@@ -544,8 +556,43 @@ int allocate_shm_file(size_t size) {
 
 static pixman_color_t fg = {0xEE00, 0xEE00, 0xEE00, 0xffff};
 static pixman_color_t bg = {0x2200, 0x2200, 0x2200, 0xffff};
+static pixman_color_t ac = {0x0000, 0x5500, 0x7700, 0xffff};
+
+int lx(int x, int width, int text_width) { return x; }
+int cx(int x, int width, int text_width) { return x + (width - text_width) / 2; }
+int rx(int x, int width, int text_width) { return x - text_width; }
+void render_chars(const char *chars, size_t len, int x, int y, int width, int (*fx)(int, int, int), pixman_image_t *pix, pixman_image_t *color) {
+  const struct fcft_glyph *glyphs[len];
+  long kern[len];
+  int text_width = 0;
+
+  for(size_t i = 0; i < len; i++) {
+    glyphs[i] = fcft_rasterize_char_utf32(fcft_font, chars[i], FCFT_SUBPIXEL_DEFAULT);
+    if(glyphs[i] == NULL) continue;
+
+    kern[i] = 0;
+    if(i > 0) {
+      long x_kern;
+      if(fcft_kerning(fcft_font, chars[i - 1], chars[i], &x_kern, NULL)) kern[i] = x_kern;
+    }
+
+    text_width += kern[i] + glyphs[i]->advance.x;
+  }
+
+  int cx = fx(x, width, text_width);
+  for(size_t i = 0; i < len; i++) {
+    const struct fcft_glyph *g = glyphs[i];
+    if(g == NULL) continue;
+    cx += kern[i];
+
+    pixman_image_composite32(PIXMAN_OP_OVER, color, g->pix, pix, 0, 0, 0, 0, cx + g->x, y + fcft_font->ascent - g->y, g->width, g->height);
+
+    cx += g->advance.x;
+  }
+}
 
 void render_bar(WlOutput *output) {
+  if(!output->done) return;
   int w = output->width, h = 20;
 
   uint32_t stride = w * 4;
@@ -566,43 +613,34 @@ void render_bar(WlOutput *output) {
 
   pixman_image_fill_rectangles(PIXMAN_OP_SRC, pix, &bg, 1, (pixman_rectangle16_t []){{0, 0, w, h}});
 
-  pixman_image_t *clr_pix = pixman_image_create_solid_fill(&fg);
+  pixman_image_t *color = pixman_image_create_solid_fill(&fg);
+  int y = (20 - fcft_font->height) / 2;
 
-  char *text = "hello world";
-  const struct fcft_glyph *glyphs[11];
-  long kern[11];
-  int text_width = 0;
-
-  for(size_t i = 0; i < 11; i++) {
-    glyphs[i] = fcft_rasterize_char_utf32(fcft_font, text[i], FCFT_SUBPIXEL_DEFAULT);
-    if(glyphs[i] == NULL) continue;
-
-    kern[i] = 0;
-    if(i > 0) {
-      long x_kern;
-      if(fcft_kerning(fcft_font, text[i - 1], text[i], &x_kern, NULL)) kern[i] = x_kern;
+  for(int i = 0; i < LENGTH(tags); i++) {
+    if(output->output->tagmask & (1 << i)) {
+      pixman_image_fill_rectangles(PIXMAN_OP_SRC, pix, &ac, 1, (pixman_rectangle16_t []){{i*20, 0, 20, 20}});
     }
 
-    text_width += kern[i] + glyphs[i]->advance.x;
+    render_chars(tags[i], 1, i*20, y, 20, &cx, pix, color);
   }
 
-  int x = 5, y = (20 - fcft_font->height) / 2;
-  for(size_t i = 0; i < 11; i++) {
-    const struct fcft_glyph *g = glyphs[i];
-    if(g == NULL) continue;
+  int ltx = LENGTH(tags)*20 + 10;
+  render_chars(output->output->lt->symbol, 3, ltx, y, 0, &lx, pix, color); // TODO: fix this rendering a couple pixels too low
 
-    x += kern[i];
+  time_t rawtime;
+  struct tm* timeinfo;
+  time(&rawtime);
+  timeinfo = localtime(&rawtime);
 
-    if(g->is_color_glyph) {
-      pixman_image_composite32(PIXMAN_OP_OVER, g->pix, NULL, pix, 0, 0, 0, 0, x + g->x, y + fcft_font->ascent - g->y, g->width, g->height);
-    } else {
-      pixman_image_composite32(PIXMAN_OP_OVER, clr_pix, g->pix, pix, 0, 0, 0, 0, x + g->x, y + fcft_font->ascent - g->y, g->width, g->height);
-    }
+  char clock[10];
+  int l1 = strftime(clock, sizeof(clock), "%H:%M:%S", timeinfo);
+  render_chars(clock, l1, 0, y, output->width, &cx, pix, color);
 
-    x += g->advance.x;
-  }
+  char date[20];
+  int l2 = strftime(date, sizeof(date), "%a, %d %b", timeinfo);
+  render_chars(date, l2, output->width - 2, y, 0, &rx, pix, color);
 
-  pixman_image_unref(clr_pix);
+  pixman_image_unref(color);
 
   wl_surface_attach(output->surface, buf, 0, 0);
   wl_surface_damage(output->surface, 0, 0, w, h);
@@ -624,6 +662,43 @@ void river_window_manager_v1_render_start(void *data, struct river_window_manage
 
   river_window_manager_v1_render_finish(window_manager);
 }
+
+void wl_surface_frame_done(void *data, struct wl_callback *cb, uint32_t time) {
+  wl_callback_destroy(cb);
+
+  WlOutput *output = data;
+  cb = wl_surface_frame(output->surface);
+  wl_callback_add_listener(cb, &wl_surface_frame_listener, output);
+
+  render_bar(output);
+}
+
+const struct wl_callback_listener wl_surface_frame_listener = {
+  .done = wl_surface_frame_done,
+};
+
+void zwlr_layer_surface_v1_configure(void *data, struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1, uint32_t serial, uint32_t width, uint32_t height) {
+  WlOutput *output = data;
+
+  zwlr_layer_surface_v1_ack_configure(zwlr_layer_surface_v1, serial);
+
+
+  if(output->done && output->width == width && output->height == height) {
+      wl_surface_commit(output->surface);
+      return;
+  }
+
+  output->width = width;
+  output->height = height;
+  if(output->done) render_bar(output);
+}
+
+void zwlr_layer_surface_v1_closed(void *data, struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1) {}
+
+const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
+  .configure = zwlr_layer_surface_v1_configure,
+  .closed = zwlr_layer_surface_v1_closed,
+};
 
 void river_window_manager_v1_session_locked(void *data, struct river_window_manager_v1 *obj) {}
 void river_window_manager_v1_session_unlocked(void *data, struct river_window_manager_v1 *obj) {}
@@ -651,29 +726,6 @@ void river_window_manager_v1_window(void *data, struct river_window_manager_v1 *
     seat->focused = window;
   }
 }
-
-void zwlr_layer_surface_v1_configure(void *data, struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1, uint32_t serial, uint32_t width, uint32_t height) {
-  WlOutput *output = data;
-
-  zwlr_layer_surface_v1_ack_configure(zwlr_layer_surface_v1, serial);
-
-
-  if(output->width == width && output->height == height) {
-      wl_surface_commit(output->surface);
-      return;
-  }
-
-  output->width = width;
-  output->height = height;
-  render_bar(output);
-}
-
-void zwlr_layer_surface_v1_closed(void *data, struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1) {}
-
-const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
-  .configure = zwlr_layer_surface_v1_configure,
-  .closed = zwlr_layer_surface_v1_closed,
-};
 
 void river_window_manager_v1_output(void *data, struct river_window_manager_v1 *obj, struct river_output_v1 *river_output) {
   Output *output = calloc(1, sizeof(Output));
@@ -891,6 +943,9 @@ void wl_output_done(void *data, struct wl_output *wl_output) {
 
   zwlr_layer_surface_v1_add_listener(output->layer_surface, &layer_surface_listener, output);
   wl_surface_commit(output->surface);
+
+  struct wl_callback *cb = wl_surface_frame(output->surface);
+  wl_callback_add_listener(cb, &wl_surface_frame_listener, output);
 }
 
 void wl_output_scale(void *data, struct wl_output *wl_output, int32_t factor) {}
@@ -939,6 +994,8 @@ void wl_registry_global(void *data, struct wl_registry *registry, uint32_t name,
 
   if(strcmp(interface, wl_output_interface.name) == 0) {
     WlOutput *output = calloc(1, sizeof(WlOutput));
+    output->done = false;
+    output->name = name;
     output->wl_output = wl_registry_bind(registry, name, &wl_output_interface, 4);
     wl_output_add_listener(output->wl_output, &wl_output_listener, output);
     wl_list_insert(&anvl.wl_outputs, &output->link);
