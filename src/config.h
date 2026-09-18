@@ -1,5 +1,6 @@
 #include "anvl.h"
 
+static const unsigned int bar_height = 20;
 static const char *font = "monospace:size=12";
 
 static const char *tags[] = { "1", "2", "3", "4", "5", "6", "7", "8", "9" };
@@ -14,10 +15,8 @@ static Layout layouts[] = {
 #define SHIFT RIVER_SEAT_V1_MODIFIERS_SHIFT
 
 #define TAGKEY(KEY,TAG) \
-  {SUPER,               KEY, view,       { .u = 1 << TAG } }, \
-  {SUPER|CONTROL,       KEY, toggleview, { .u = 1 << TAG } }, \
-  {SUPER|SHIFT,         KEY, tag,        { .u = 1 << TAG } }, \
-  {SUPER|SHIFT|CONTROL, KEY, toggletag,  { .u = 1 << TAG } },
+  {SUPER,               KEY, view,       { .u = TAG } }, \
+  {SUPER|SHIFT,         KEY, tag,        { .u = TAG } },
 
 static const char *termcmd[] = { "foot", NULL };
 
@@ -28,10 +27,6 @@ static Keys keybinds[] = {
   {SUPER,         XKB_KEY_t,      setlayout,       {.v = &layouts[0]} },
   {SUPER,         XKB_KEY_m,      setlayout,       {.v = &layouts[1]} },
   {SUPER|SHIFT,   XKB_KEY_q,      exit_session,    {0} },
-  {SUPER,         XKB_KEY_i,      incnmaster,      { .i = +1 } },
-  {SUPER,         XKB_KEY_d,      incnmaster,      { .i = -1 } },
-  {SUPER,         XKB_KEY_h,      setmfact,        { .f = -0.05 } },
-  {SUPER,         XKB_KEY_l,      setmfact,        { .f = +0.05 } },
   {SUPER,         XKB_KEY_j,      focus_prev,      {0} },
   {SUPER,         XKB_KEY_k,      focus_next,      {0} },
   {SUPER|SHIFT,   XKB_KEY_Return, spawn,           { .v = termcmd } },

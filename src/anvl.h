@@ -16,11 +16,13 @@
 
 #include <wlr-layer-shell-unstable-v1-client-protocol.h>
 
+typedef struct WlOutput WlOutput;
 typedef struct Window Window;
 typedef struct Output Output;
-typedef struct WlOutput WlOutput;
 typedef struct Layout Layout;
+typedef struct Node Node;
 typedef struct Seat Seat;
+typedef struct Tag Tag;
 
 struct Window {
   struct river_window_v1 *river_window;
@@ -33,8 +35,42 @@ struct Window {
   int width;
   int height;
 
-  Output *mon;
-  uint32_t tagmask;
+  Node *node;
+};
+
+typedef enum {
+  HORIZONTAL,
+  VERTICAL,
+  UNSET
+} split_type_t;
+
+struct Node {
+  split_type_t split_type;
+  double split_ratio;
+
+  int x;
+  int y;
+
+  int width;
+  int height;
+
+  Window *window;
+
+  Node *first;
+  Node *second;
+  Node *parent;
+
+  Tag *tag;
+};
+
+struct Tag {
+  int n;
+  const char *sym;
+
+  Node *root;
+  Node *focused;
+
+  Layout *lt;
 };
 
 struct Output {
@@ -48,13 +84,8 @@ struct Output {
   int width;
   int height;
 
-  int nmaster;
-  float mfact;
-
   uint32_t seltag;
-  uint32_t tagmask;
-
-  Layout *lt;
+  Tag *tags[9];
 };
 
 struct WlOutput{
@@ -132,20 +163,15 @@ typedef struct {
   Arg arg;
 } Keys;
 
-
 void destroy_window(Seat *seat, Arg *arg);
 void select_next_mon(Seat *seat, Arg *arg);
 void select_prev_mon(Seat *seat, Arg *arg);
 void focus_next(Seat *seat, Arg *arg);
 void focus_prev(Seat *esat, Arg *arg);
-void incnmaster(Seat *seat, Arg *arg);
-void setmfact(Seat *seat, Arg *arg);
 void exit_session(Seat *seat, Arg *arg);
 void spawn(Seat *seat, Arg *arg);
 void view(Seat *seat, Arg *arg);
-void toggleview(Seat *seat, Arg *arg);
 void tag(Seat *seat, Arg *arg);
-void toggletag(Seat *seat, Arg *arg);
 void setlayout(Seat *seat, Arg *arg);
 
 void tile(Output *output);

@@ -1,6 +1,6 @@
 # ANVL
 
-A minimal river based tiling window manager inspired and influenced by dwm and tinyrwm.  
+A minimal river based tiling window manager inspired and influenced by dwm, bspwm and tinyrwm.  
 
 At this time, the window manager is not stable, so expect bugs and crashes.  
 

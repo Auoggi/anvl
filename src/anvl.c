@@ -33,7 +33,7 @@ WindowManager anvl;
 Output *selmon = NULL;
 
 struct wl_shm *shm;
-struct wl_compositor *wl_compositor;
+struct wl_compositor *compositor;
 struct zwlr_layer_shell_v1 *zwlr_layer_shell;
 
 struct fcft_font *fcft_font = NULL;
@@ -52,7 +52,6 @@ void destroy_window(Seat *seat, Arg *arg) {
   }
 }
 
-// TODO: Focus first window of mon
 void select_next_mon(Seat *seat, Arg *arg) {
   if(selmon != NULL) {
     Output *next = wl_container_of(selmon->link.next, selmon, link);
@@ -64,7 +63,6 @@ void select_next_mon(Seat *seat, Arg *arg) {
   }
 }
 
-// TODO: Focus first window of mon
 void select_prev_mon(Seat *seat, Arg *arg) {
   if(selmon != NULL) {
     Output *prev = wl_container_of(selmon->link.prev, selmon, link);
@@ -98,62 +96,22 @@ void focus_prev(Seat *seat, Arg *arg) {
   }
 }
 
-// TODO: maybe use selmon instead here
-void incnmaster(Seat *seat, Arg *arg) {
-  if(seat->focused != NULL) {
-    seat->focused->mon->nmaster += arg->i;
-    CLAMP(seat->focused->mon->nmaster, 0, (1 << 16));
-  }
-}
-
-void setmfact(Seat *seat, Arg *arg) {
-  if(seat->focused != NULL) {
-    seat->focused->mon->mfact += arg->f;
-    CLAMP(seat->focused->mon->mfact, 0, 1);
-  }
-}
-
 void view(Seat *seat, Arg *arg) {
   if(selmon != NULL) {
     selmon->seltag = arg->u;
-    selmon->tagmask = arg->u;
   }
 }
 
-void toggleview(Seat *seat, Arg *arg) {
-  if(selmon != NULL) {
-    selmon->tagmask ^= arg->u;
-
-    if(selmon->tagmask == 0) {
-      selmon->tagmask = selmon->seltag;
-    }
-
-    // If current selected tag is toggled off, select leftmost viewed tag
-    if(arg->u == selmon->seltag) {
-      selmon->seltag = selmon->tagmask & -selmon->tagmask;
-    }
-  }
-}
-
+// TODO: Implement support for moving windows between tags
 void tag(Seat *seat, Arg *arg) {
   if(seat->focused != NULL) {
-    seat->focused->tagmask = arg->u;
-  }
-}
-
-void toggletag(Seat *seat, Arg *arg) {
-  if(seat->focused != NULL) {
-    seat->focused->tagmask ^= arg->u;
-
-    if(seat->focused->tagmask == 0) {
-      seat->focused->tagmask = selmon->seltag;
-    }
+    // seat->focused->tagmask = arg->u;
   }
 }
 
 void setlayout(Seat *seat, Arg *arg) {
   if(selmon != NULL) {
-    selmon->lt = arg->v;
+    selmon->tags[selmon->seltag]->lt = arg->v;
   }
 }
 
@@ -165,15 +123,135 @@ void spawn(Seat *seat, Arg *arg) {
   if(fork() == 0) execvp(((char **) arg->v)[0], (char **) arg->v);
 }
 
+Node *create_node(Tag *tag, Window *window, Node *parent) {
+  Node *node = calloc(1, sizeof(Node));
+  node->tag = tag;
+  node->split_type = UNSET;
+  node->split_ratio = 0.5;
+  node->window = window;
+  node->first = node->second = NULL;
+  node->parent = parent;
+
+  return node;
+}
+
+// Insert window after ref, which has to be a leaf node with a window attached, by splitting it
+// If ref is NULL, the tree is assumed to be empty and window is inserted on root
+void insert_node(Window *window, Node *root, Node *ref) {
+  if(ref == NULL) {
+    root->window = window;
+    window->node = root;
+    root->tag->focused = root;
+  } else {
+    Window *ref_window = ref->window;
+    ref->window = NULL;
+
+    if(ref->split_type == UNSET) {
+      if(ref->width >= ref->height) ref->split_type = VERTICAL;
+      else ref->split_type = HORIZONTAL;
+    }
+
+    Node *first = create_node(root->tag, ref_window, ref);
+    ref_window->node = first;
+
+    Node *second = create_node(root->tag, window, ref);
+    window->node = second;
+
+    ref->first = first;
+    ref->second = second;
+    root->tag->focused = second;
+  }
+}
+
+void remove_node(Node *node) {
+  Node *parent = node->parent;
+  if(parent == NULL) {
+    node->tag->focused = NULL;
+    node->split_type = UNSET;
+    node->split_ratio = 0.5;
+    node->window = NULL;
+  } else {
+    Node *sibling = parent->first != node ? parent->first : parent->second;
+
+    parent->split_type = sibling->split_type;
+    parent->split_ratio = sibling->split_ratio;
+    parent->first = sibling->first;
+    if(parent->first != NULL) parent->first->parent = parent;
+    parent->second = sibling->second;
+    if(parent->second != NULL) parent->second->parent = parent;
+    parent->window = sibling->window;
+    if(parent->window != NULL) parent->window->node = parent;
+
+    free(node);
+    free(sibling);
+    // TODO: at this point focused is now invalid, it does not seem as if this is a problem
+    // as it is reassigned on the following manage sequence, however this should still be fixed.
+  }
+}
+
+void propogate_layout(Node *root) {
+  Node *queue[1 << 16];
+  uint32_t front = 0;
+  uint32_t back = 0;
+
+  queue[back++] = root;
+
+  Node *n;
+  while(front != back) {
+    n = queue[front++];
+    if(n->first != NULL && n->second != NULL) {
+      queue[back++] = n->first;
+      queue[back++] = n->second;
+
+      n->first->x = n->x;
+      n->first->y = n->y;
+      n->first->width = n->split_type == VERTICAL ? n->width * n->split_ratio : n->width;
+      n->first->height = n->split_type == HORIZONTAL ? n->height * n->split_ratio : n->height;
+
+      n->second->x = n->split_type == VERTICAL ? n->x + n->first->width : n->x;
+      n->second->y = n->split_type == HORIZONTAL ? n->y + n->first->height : n->y;
+      n->second->width = n->split_type == VERTICAL ? n->width - n->first->width : n->width;
+      n->second->height = n->split_type == HORIZONTAL ? n->height - n->first->height : n->height;
+    }
+  }
+}
+
 // include config.h for definition of keybinds
 #include "config.h"
 
+// TODO: reconsider how windows are treated here
 void river_output_v1_removed(void *data, struct river_output_v1 *obj) {
   Output *output = data;
 
   river_layer_shell_output_v1_destroy(output->river_layer_shell);
   river_output_v1_destroy(output->river_output);
   wl_list_remove(&output->link);
+
+  for(int i = 0; i < LENGTH(output->tags); i++) {
+    Tag *tag = output->tags[i];
+
+    Node *queue[1 << 16];
+    uint32_t front = 0;
+    uint32_t back = 0;
+
+    queue[back++] = tag->root;
+
+    Node *n;
+    while(front != back) {
+      n = queue[front++];
+      if(n->first != NULL && n->second != NULL) {
+        queue[back++] = n->first;
+        queue[back++] = n->second;
+      } else if(n->window != NULL) {
+        n->window->node = NULL;
+      }
+
+      free(n);
+    }
+
+    free(tag);
+  }
+
   free(output);
 }
 
@@ -194,6 +272,13 @@ void river_output_v1_position(void *data, struct river_output_v1 *obj, int32_t x
 
   output->x = x;
   output->y = y;
+
+  for(int i = 0; i < LENGTH(output->tags); i++) {
+    Tag *tag = output->tags[i];
+
+    tag->root->x = x;
+    tag->root->y = y + bar_height;
+  }
 }
 
 void river_output_v1_dimensions(void *data, struct river_output_v1 *obj, int32_t width, int32_t height) {
@@ -201,6 +286,13 @@ void river_output_v1_dimensions(void *data, struct river_output_v1 *obj, int32_t
 
   output->width = width;
   output->height = height;
+
+  for(int i = 0; i < LENGTH(output->tags); i++) {
+    Tag *tag = output->tags[i];
+
+    tag->root->width = width;
+    tag->root->height = height - bar_height;
+  }
 }
 
 const struct river_output_v1_listener output_listener = {
@@ -219,6 +311,8 @@ void river_window_v1_closed(void *data, struct river_window_v1 *obj) {
       seat->focused = NULL;
     }
   }
+
+  remove_node(window->node);
 
   river_window_v1_destroy(window->river_window);
   wl_list_remove(&window->link);
@@ -271,8 +365,8 @@ const struct river_window_v1_listener window_listener = {
 };
 
 void window_set_position(Window *window, int x, int y) {
-  window->x = x + window->mon->x;
-  window->y = y + window->mon->y;
+  window->x = x;
+  window->y = y;
   river_node_v1_set_position(window->river_node, window->x, window->y);
 }
 
@@ -432,6 +526,7 @@ void manage_seat(Seat *seat) {
   if(seat->focused != NULL) {
     river_seat_v1_focus_window(seat->river_seat, seat->focused->river_window);
     river_node_v1_place_top(seat->focused->river_node);
+    seat->focused->node->tag->focused = seat->focused->node;
   } else {
     river_seat_v1_clear_focus(seat->river_seat);
   }
@@ -447,64 +542,64 @@ void river_window_manager_v1_finished(void *data, struct river_window_manager_v1
 }
 
 void tile(Output *output) {
-  int m, n = 0, h, ly = 20, ry = 20, w; // TODO: handle rendering below bar better
+  Node *queue[1 << 16];
+  uint32_t front = 0;
+  uint32_t back = 0;
 
-  Window *window;
-  wl_list_for_each(window, &anvl.windows, link) {
-    if(window->mon == output && ISVISIBLE(window)) n++;
-  }
+  queue[back++] = output->tags[output->seltag]->root;
 
-  m = output->nmaster != 0 ? output->nmaster : n;
-  if(n > m) w = output->width * output->mfact;
-  else w = output->width;
-
-  int i = 0;
-  wl_list_for_each(window, &anvl.windows, link) {
-    if(window->mon == output && ISVISIBLE(window)) {
-      river_window_v1_show(window->river_window);
-
-      if(i < m) {
-        window_set_position(window, 0, ly);
-        h = (output->height - ly) / (MIN(n, m) - i);
-        ly += h;
-        window_set_dimensions(window, w, h);
-      } else {
-        window_set_position(window, w, ry);
-        h = (output->height - ry) / (n - i);
-        ry += h;
-        window_set_dimensions(window, output->width - w, h);
-      }
-
-      i++;
+  Node *n;
+  while(front != back) {
+    n = queue[front++];
+    if(n->first != NULL && n->second != NULL) {
+      queue[back++] = n->first;
+      queue[back++] = n->second;
+    } else if(n->window != NULL) {
+      river_window_v1_show(n->window->river_window);
+      window_set_dimensions(n->window, n->window->node->width, n->window->node->height);
+      window_set_position(n->window, n->window->node->x, n->window->node->y);
     }
   }
 }
 
 void monocle(Output *output) {
-  Window *window;
-  wl_list_for_each(window, &anvl.windows, link) {
-    if(window->mon == output && ISVISIBLE(window)) {
-      river_window_v1_show(window->river_window);
-      window_set_position(window, 0, 20); // TODO: handle rendering below bar better
-      window_set_dimensions(window, output->width, output->height);
+  Node *queue[1 << 16];
+  uint32_t front = 0;
+  uint32_t back = 0;
+
+  queue[back++] = output->tags[output->seltag]->root;
+
+  Node *n;
+  while(front != back) {
+    n = queue[front++];
+    if(n->first != NULL && n->second != NULL) {
+      queue[back++] = n->first;
+      queue[back++] = n->second;
+    } else if(n->window != NULL) {
+      river_window_v1_show(n->window->river_window);
+      window_set_position(n->window, output->x, bar_height);
+      window_set_dimensions(n->window, output->width, output->height - bar_height);
     }
   }
 }
 
 void river_window_manager_v1_manage_start(void *data, struct river_window_manager_v1 *obj) {
+  Seat *seat;
+  wl_list_for_each(seat, &anvl.seats, link) {
+    manage_seat(seat);
+  }
+
   Window *window;
   wl_list_for_each(window, &anvl.windows, link) {
     river_window_v1_hide(window->river_window);
   }
 
+  Tag *tag;
   Output *output;
   wl_list_for_each(output, &anvl.outputs, link) {
-    output->lt->manage(output);
-  }
-
-  Seat *seat;
-  wl_list_for_each(seat, &anvl.seats, link) {
-    manage_seat(seat);
+    tag = output->tags[output->seltag];
+    propogate_layout(tag->root);
+    tag->lt->manage(output);
   }
 
   river_window_manager_v1_manage_finish(window_manager);
@@ -593,7 +688,7 @@ void render_chars(const char *chars, size_t len, int x, int y, int width, int (*
 
 void render_bar(WlOutput *output) {
   if(!output->done) return;
-  int w = output->width, h = 20;
+  int w = output->width, h = bar_height;
 
   uint32_t stride = w * 4;
   int shm_pool_size = h * stride;
@@ -614,18 +709,18 @@ void render_bar(WlOutput *output) {
   pixman_image_fill_rectangles(PIXMAN_OP_SRC, pix, &bg, 1, (pixman_rectangle16_t []){{0, 0, w, h}});
 
   pixman_image_t *color = pixman_image_create_solid_fill(&fg);
-  int y = (20 - fcft_font->height) / 2;
+  int y = (h - fcft_font->height) / 2;
 
   for(int i = 0; i < LENGTH(tags); i++) {
-    if(output->output->tagmask & (1 << i)) {
-      pixman_image_fill_rectangles(PIXMAN_OP_SRC, pix, &ac, 1, (pixman_rectangle16_t []){{i*20, 0, 20, 20}});
+    if(output->output->seltag == i) {
+      pixman_image_fill_rectangles(PIXMAN_OP_SRC, pix, &ac, 1, (pixman_rectangle16_t []){{i*h, 0, h, h}});
     }
 
-    render_chars(tags[i], 1, i*20, y, 20, &cx, pix, color);
+    render_chars(tags[i], 1, i*h, y, h, &cx, pix, color);
   }
 
-  int ltx = LENGTH(tags)*20 + 10;
-  render_chars(output->output->lt->symbol, 3, ltx, y, 0, &lx, pix, color); // TODO: fix this rendering a couple pixels too low
+  int ltx = LENGTH(tags)*h + 10;
+  render_chars(output->output->tags[output->output->seltag]->lt->symbol, 3, ltx, y, 0, &lx, pix, color); // TODO: fix this rendering a couple pixels too low
 
   time_t rawtime;
   struct tm* timeinfo;
@@ -703,13 +798,16 @@ const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
 void river_window_manager_v1_session_locked(void *data, struct river_window_manager_v1 *obj) {}
 void river_window_manager_v1_session_unlocked(void *data, struct river_window_manager_v1 *obj) {}
 
-// TODO: Add window after focused window, instead of at the very start
 void river_window_manager_v1_window(void *data, struct river_window_manager_v1 *obj, struct river_window_v1 *river_window) {
   Window *window = calloc(1, sizeof(Window));
   window->river_window = river_window;
   window->river_node = river_window_v1_get_node(window->river_window);
-  window->mon = selmon;
-  window->tagmask = selmon->seltag;
+
+  Tag *tag = selmon->tags[selmon->seltag]; // TODO: Maybe reconsider using selmon in general
+  Node *root = tag->root;
+  Node *focused = tag->focused;
+
+  insert_node(window, root, focused);
 
   river_window_v1_add_listener(window->river_window, &window_listener, window);
   wl_list_insert(&anvl.windows, &window->link);
@@ -731,11 +829,17 @@ void river_window_manager_v1_output(void *data, struct river_window_manager_v1 *
   Output *output = calloc(1, sizeof(Output));
   output->river_output = river_output;
   output->river_layer_shell = river_layer_shell_v1_get_output(layer_shell, river_output);
-  output->nmaster = 1;
-  output->mfact = 0.5f;
-  output->seltag = 1;
-  output->tagmask = 1;
-  output->lt = &layouts[0];
+  output->seltag = 0;
+
+  for(int i = 0; i < LENGTH(tags); i++) {
+    Tag *tag = calloc(1, sizeof(Tag));
+    tag->n = i;
+    tag->sym = tags[i];
+    tag->root = create_node(tag, NULL, NULL);
+    tag->focused = NULL;
+    tag->lt = &layouts[0];
+    output->tags[i] = tag;
+  }
 
   river_output_v1_add_listener(output->river_output, &output_listener, output);
   river_layer_shell_output_v1_add_listener(output->river_layer_shell, &layer_shell_output_listener, output);
@@ -925,9 +1029,9 @@ void wl_output_mode(void *data, struct wl_output *wl_output, uint32_t flags, int
 void wl_output_done(void *data, struct wl_output *wl_output) {
   WlOutput *output = data;
 
-  output->surface = wl_compositor_create_surface(wl_compositor);
+  output->surface = wl_compositor_create_surface(compositor);
 
-  struct wl_region *input_region = wl_compositor_create_region(wl_compositor);
+  struct wl_region *input_region = wl_compositor_create_region(compositor);
   wl_surface_set_input_region(output->surface, input_region);
   wl_region_destroy(input_region);
 
@@ -1010,7 +1114,7 @@ void wl_registry_global(void *data, struct wl_registry *registry, uint32_t name,
   }
 
   if(strcmp(interface, wl_compositor_interface.name) == 0) {
-    wl_compositor = wl_registry_bind(registry, name, &wl_compositor_interface, version);
+    compositor = wl_registry_bind(registry, name, &wl_compositor_interface, version);
   }
 
   if(strcmp(interface, wl_shm_interface.name) == 0) {
