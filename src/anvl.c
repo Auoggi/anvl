@@ -52,7 +52,7 @@ void destroy_window(Seat *seat, Arg *arg) {
   }
 }
 
-void select_next_mon(Seat *seat, Arg *arg) {
+void focus_next_mon(Seat *seat, Arg *arg) {
   if(selmon != NULL) {
     Output *next = wl_container_of(selmon->link.next, selmon, link);
     if(next != NULL && &next->link != &anvl.outputs) {
@@ -63,7 +63,7 @@ void select_next_mon(Seat *seat, Arg *arg) {
   }
 }
 
-void select_prev_mon(Seat *seat, Arg *arg) {
+void focus_prev_mon(Seat *seat, Arg *arg) {
   if(selmon != NULL) {
     Output *prev = wl_container_of(selmon->link.prev, selmon, link);
     if(prev != NULL && &prev->link != &anvl.outputs) {
@@ -71,6 +71,36 @@ void select_prev_mon(Seat *seat, Arg *arg) {
       river_layer_shell_output_v1_set_default(selmon->river_layer_shell);
       river_seat_v1_pointer_warp(seat->river_seat, selmon->x + selmon->width/2, selmon->y + selmon->height/2);
     }
+  }
+}
+
+void tag_next_mon(Seat *seat, Arg *arg) {
+  if(selmon != NULL && seat->focused != NULL) {
+    Output *next = wl_container_of(selmon->link.next, selmon, link);
+    if(next != NULL && &next->link != &anvl.outputs) {
+      remove_node(seat->focused->node);
+      insert_node(seat->focused, next->tags[next->seltag]->root, next->tags[next->seltag]->focused);
+    }
+  }
+}
+
+void tag_prev_mon(Seat *seat, Arg *arg) {
+  if(selmon != NULL && seat->focused != NULL) {
+    Output *prev = wl_container_of(selmon->link.prev, selmon, link);
+    if(prev != NULL && &prev->link != &anvl.outputs) {
+      remove_node(seat->focused->node);
+      insert_node(seat->focused, prev->tags[prev->seltag]->root, prev->tags[prev->seltag]->focused);
+    }
+  }
+}
+
+void exit_session(Seat *seat, Arg *arg) {
+  river_window_manager_v1_exit_session(window_manager);
+}
+
+void set_layout(Seat *seat, Arg *arg) {
+  if(selmon != NULL) {
+    selmon->tags[selmon->seltag]->lt = arg->v;
   }
 }
 
@@ -102,21 +132,11 @@ void view(Seat *seat, Arg *arg) {
   }
 }
 
-// TODO: Implement support for moving windows between tags
 void tag(Seat *seat, Arg *arg) {
   if(seat->focused != NULL) {
-    // seat->focused->tagmask = arg->u;
+    remove_node(seat->focused->node);
+    insert_node(seat->focused, selmon->tags[arg->u]->root, selmon->tags[arg->u]->focused);
   }
-}
-
-void setlayout(Seat *seat, Arg *arg) {
-  if(selmon != NULL) {
-    selmon->tags[selmon->seltag]->lt = arg->v;
-  }
-}
-
-void exit_session(Seat *seat, Arg *arg) {
-  river_window_manager_v1_exit_session(window_manager);
 }
 
 void spawn(Seat *seat, Arg *arg) {
@@ -185,7 +205,7 @@ void remove_node(Node *node) {
     free(node);
     free(sibling);
     // TODO: at this point focused is now invalid, it does not seem as if this is a problem
-    // as it is reassigned on the following manage sequence, however this should still be fixed.
+    //  as it is reassigned on the following manage sequence, however this should still be fixed.
   }
 }
 
@@ -597,8 +617,12 @@ void river_window_manager_v1_manage_start(void *data, struct river_window_manage
   Tag *tag;
   Output *output;
   wl_list_for_each(output, &anvl.outputs, link) {
+    for(int i = 0; i < LENGTH(output->tags); i++) {
+      tag = output->tags[i];
+      propogate_layout(tag->root);
+    }
+
     tag = output->tags[output->seltag];
-    propogate_layout(tag->root);
     tag->lt->manage(output);
   }
 

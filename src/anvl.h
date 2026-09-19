@@ -164,15 +164,22 @@ typedef struct {
 } Keys;
 
 void destroy_window(Seat *seat, Arg *arg);
-void select_next_mon(Seat *seat, Arg *arg);
-void select_prev_mon(Seat *seat, Arg *arg);
+void focus_next_mon(Seat *seat, Arg *arg);
+void focus_prev_mon(Seat *seat, Arg *arg);
+void tag_next_mon(Seat *seat, Arg *arg);
+void tag_prev_mon(Seat *seat, Arg *arg);
+void exit_session(Seat *seat, Arg *arg);
 void focus_next(Seat *seat, Arg *arg);
 void focus_prev(Seat *esat, Arg *arg);
-void exit_session(Seat *seat, Arg *arg);
+void set_layout(Seat *seat, Arg *arg);
 void spawn(Seat *seat, Arg *arg);
 void view(Seat *seat, Arg *arg);
 void tag(Seat *seat, Arg *arg);
-void setlayout(Seat *seat, Arg *arg);
+
+Node *create_node(Tag *tag, Window *window, Node *parent);
+void insert_node(Window *window, Node *root, Node *ref);
+void remove_node(Node *node);
+void propogate_layout(Node *root);
 
 void tile(Output *output);
 void monocle(Output *output);
