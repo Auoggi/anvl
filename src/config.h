@@ -1,10 +1,10 @@
 #include "anvl.h"
 
-static const char *keyboard_layout = "us";
-
-static const bool draw_bar           = true;
-static const unsigned int bar_height = 16;
-static const char *font              = "monospace:size=10";
+static const unsigned int gappx = 4; // 0 to disable gap
+static const bool show_bar      = true;
+static const int barpx          = 16;
+static const char *font         = "monospace:size=10";
+static const char *kb_layout    = "us";
 
 static const char *tags[] = { "1", "2", "3", "4", "5", "6", "7", "8", "9" };
 
@@ -16,6 +16,7 @@ static Layout layouts[] = {
 #define CONTROL RIVER_SEAT_V1_MODIFIERS_CTRL
 #define SUPER RIVER_SEAT_V1_MODIFIERS_MOD4
 #define SHIFT RIVER_SEAT_V1_MODIFIERS_SHIFT
+#define ALT RIVER_SEAT_V1_MODIFIERS_MOD1
 
 #define TAGKEY(KEY,TAG) \
   {SUPER,               KEY, view,       { .u = TAG } }, \

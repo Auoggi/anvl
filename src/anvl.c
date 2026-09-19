@@ -22,6 +22,7 @@
 #include <fcft/fcft.h>
 
 #include "anvl.h"
+#include "config.h"
 
 #define MIN(A, B) (A < B ? A : B)
 #define MAX(A, B) (A > B ? A : B)
@@ -225,19 +226,16 @@ void propogate_layout(Node *root) {
 
       n->first->x = n->x;
       n->first->y = n->y;
-      n->first->width = n->split_type == VERTICAL ? n->width * n->split_ratio : n->width;
-      n->first->height = n->split_type == HORIZONTAL ? n->height * n->split_ratio : n->height;
+      n->first->width = n->split_type == VERTICAL ? n->width * n->split_ratio - (gappx >> 1) : n->width;
+      n->first->height = n->split_type == HORIZONTAL ? n->height * n->split_ratio - (gappx >> 1) : n->height;
 
-      n->second->x = n->split_type == VERTICAL ? n->x + n->first->width : n->x;
-      n->second->y = n->split_type == HORIZONTAL ? n->y + n->first->height : n->y;
-      n->second->width = n->split_type == VERTICAL ? n->width - n->first->width : n->width;
-      n->second->height = n->split_type == HORIZONTAL ? n->height - n->first->height : n->height;
+      n->second->x = n->split_type == VERTICAL ? n->x + n->first->width + gappx : n->x;
+      n->second->y = n->split_type == HORIZONTAL ? n->y + n->first->height + gappx : n->y;
+      n->second->width = n->split_type == VERTICAL ? n->width - n->first->width - gappx : n->width;
+      n->second->height = n->split_type == HORIZONTAL ? n->height - n->first->height - gappx : n->height;
     }
   }
 }
-
-// include config.h for definition of keybinds
-#include "config.h"
 
 // TODO: reconsider how windows are treated here
 void river_output_v1_removed(void *data, struct river_output_v1 *obj) {
@@ -296,8 +294,8 @@ void river_output_v1_position(void *data, struct river_output_v1 *obj, int32_t x
   for(int i = 0; i < LENGTH(output->tags); i++) {
     Tag *tag = output->tags[i];
 
-    tag->root->x = x;
-    tag->root->y = y + (draw_bar ? bar_height : 0);
+    tag->root->x = x + gappx;
+    tag->root->y = y + (show_bar ? barpx : 0) + gappx;
   }
 }
 
@@ -310,8 +308,8 @@ void river_output_v1_dimensions(void *data, struct river_output_v1 *obj, int32_t
   for(int i = 0; i < LENGTH(output->tags); i++) {
     Tag *tag = output->tags[i];
 
-    tag->root->width = width;
-    tag->root->height = height - (draw_bar ? bar_height : 0);
+    tag->root->width = width - 2*gappx;
+    tag->root->height = height - (show_bar ? barpx : 0) - 2*gappx;
   }
 }
 
@@ -597,8 +595,8 @@ void monocle(Output *output) {
       queue[back++] = n->second;
     } else if(n->window != NULL) {
       river_window_v1_show(n->window->river_window);
-      window_set_position(n->window, output->x, (draw_bar ? bar_height : 0));
-      window_set_dimensions(n->window, output->width, output->height - (draw_bar ? bar_height : 0));
+      window_set_position(n->window, output->x, (show_bar ? barpx : 0));
+      window_set_dimensions(n->window, output->width, output->height - (show_bar ? barpx : 0));
     }
   }
 }
@@ -711,13 +709,13 @@ void render_chars(const char *chars, size_t len, int x, int y, int width, int (*
 }
 
 void render_bar(WlOutput *output) {
-  if(!draw_bar) {
+  if(!show_bar) {
     wl_surface_commit(output->surface);
     return;
   }
 
   if(!output->done) return;
-  int w = output->width, h = bar_height;
+  int w = output->width, h = barpx;
 
   uint32_t stride = w * 4;
   int shm_pool_size = h * stride;
@@ -982,7 +980,7 @@ const struct river_xkb_config_v1_listener xkb_config_listener = {
 // credit to https://git.sr.ht/~zuki/zrwm/tree/afc021dd91bba7a69b1f10fbbf8c5d7bfd66490a/item/zrwm.c#L636
 struct river_xkb_keymap_v1* create_keymap() {
   struct xkb_rule_names keymap_rule_names = {0};
-  keymap_rule_names.layout = keyboard_layout;
+  keymap_rule_names.layout = kb_layout;
 
   struct xkb_keymap *keymap = xkb_keymap_new_from_names2(xkb_context, &keymap_rule_names, XKB_KEYMAP_FORMAT_TEXT_V2, XKB_KEYMAP_COMPILE_NO_FLAGS);
   if(keymap == NULL) {
