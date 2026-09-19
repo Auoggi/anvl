@@ -1,7 +1,10 @@
 #include "anvl.h"
 
-static const unsigned int bar_height = 20;
-static const char *font = "monospace:size=12";
+static const char *keyboard_layout = "us";
+
+static const bool draw_bar           = true;
+static const unsigned int bar_height = 16;
+static const char *font              = "monospace:size=10";
 
 static const char *tags[] = { "1", "2", "3", "4", "5", "6", "7", "8", "9" };
 

@@ -297,7 +297,7 @@ void river_output_v1_position(void *data, struct river_output_v1 *obj, int32_t x
     Tag *tag = output->tags[i];
 
     tag->root->x = x;
-    tag->root->y = y + bar_height;
+    tag->root->y = y + (draw_bar ? bar_height : 0);
   }
 }
 
@@ -311,7 +311,7 @@ void river_output_v1_dimensions(void *data, struct river_output_v1 *obj, int32_t
     Tag *tag = output->tags[i];
 
     tag->root->width = width;
-    tag->root->height = height - bar_height;
+    tag->root->height = height - (draw_bar ? bar_height : 0);
   }
 }
 
@@ -597,8 +597,8 @@ void monocle(Output *output) {
       queue[back++] = n->second;
     } else if(n->window != NULL) {
       river_window_v1_show(n->window->river_window);
-      window_set_position(n->window, output->x, bar_height);
-      window_set_dimensions(n->window, output->width, output->height - bar_height);
+      window_set_position(n->window, output->x, (draw_bar ? bar_height : 0));
+      window_set_dimensions(n->window, output->width, output->height - (draw_bar ? bar_height : 0));
     }
   }
 }
@@ -711,6 +711,11 @@ void render_chars(const char *chars, size_t len, int x, int y, int width, int (*
 }
 
 void render_bar(WlOutput *output) {
+  if(!draw_bar) {
+    wl_surface_commit(output->surface);
+    return;
+  }
+
   if(!output->done) return;
   int w = output->width, h = bar_height;
 
@@ -734,17 +739,18 @@ void render_bar(WlOutput *output) {
 
   pixman_image_t *color = pixman_image_create_solid_fill(&fg);
   int y = (h - fcft_font->height) / 2;
+  int boxw = h + 4; // TODO: remove magic numbers like this
 
   for(int i = 0; i < LENGTH(tags); i++) {
     if(output->output->seltag == i) {
-      pixman_image_fill_rectangles(PIXMAN_OP_SRC, pix, &ac, 1, (pixman_rectangle16_t []){{i*h, 0, h, h}});
+      pixman_image_fill_rectangles(PIXMAN_OP_SRC, pix, &ac, 1, (pixman_rectangle16_t []){{i*boxw, 0, boxw, h}});
     }
 
-    render_chars(tags[i], 1, i*h, y, h, &cx, pix, color);
+    render_chars(tags[i], 1, i*boxw, y, boxw, &cx, pix, color);
   }
 
-  int ltx = LENGTH(tags)*h + 10;
-  render_chars(output->output->tags[output->output->seltag]->lt->symbol, 3, ltx, y, 0, &lx, pix, color); // TODO: fix this rendering a couple pixels too low
+  int ltx = LENGTH(tags)*boxw + boxw / 2;
+  render_chars(output->output->tags[output->output->seltag]->lt->symbol, 3, ltx, y, 0, &lx, pix, color);
 
   time_t rawtime;
   struct tm* timeinfo;
@@ -976,7 +982,7 @@ const struct river_xkb_config_v1_listener xkb_config_listener = {
 // credit to https://git.sr.ht/~zuki/zrwm/tree/afc021dd91bba7a69b1f10fbbf8c5d7bfd66490a/item/zrwm.c#L636
 struct river_xkb_keymap_v1* create_keymap() {
   struct xkb_rule_names keymap_rule_names = {0};
-  keymap_rule_names.layout = "us";
+  keymap_rule_names.layout = keyboard_layout;
 
   struct xkb_keymap *keymap = xkb_keymap_new_from_names2(xkb_context, &keymap_rule_names, XKB_KEYMAP_FORMAT_TEXT_V2, XKB_KEYMAP_COMPILE_NO_FLAGS);
   if(keymap == NULL) {
