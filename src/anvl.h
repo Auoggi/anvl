@@ -104,15 +104,37 @@ struct WlOutput{
   struct zwlr_layer_surface_v1 *layer_surface;
 };
 
+typedef enum {
+	NONE,
+	TILE_RESIZE,
+} operation_type_t;
+
 struct Seat {
   struct river_seat_v1 *river_seat;
   struct wl_list link;
 
   Window *focused;
 
+  // Pointer position
+  int px;
+  int py;
+
+  operation_type_t op;
+
+  Node *op_vnode;
+  Node *op_hnode;
+  double op_vratio;
+  double op_hratio;
+
   struct wl_list keys;
   struct wl_list buttons;
 };
+
+typedef struct {
+  struct river_xkb_keyboard_v1 *river_xkb_keyboard;
+
+  struct wl_list link;
+} Keyboard;
 
 typedef struct {
   struct wl_list windows;
@@ -145,12 +167,17 @@ typedef struct {
 } Key;
 
 typedef struct {
+  uint32_t mods;
+  xkb_keysym_t key;
+  void (*func)(Seat *seat, Arg *arg);
+  Arg arg;
+} Keys;
+
+typedef struct {
   struct river_pointer_binding_v1 *river_pointer_binding;
   struct wl_list link;
 
   Seat *seat;
-
-  bool pressed;
 
   void (*func)(Seat *seat, Arg *arg);
   Arg *arg;
@@ -158,10 +185,10 @@ typedef struct {
 
 typedef struct {
   uint32_t mods;
-  xkb_keysym_t key;
+  uint32_t button;
   void (*func)(Seat *seat, Arg *arg);
   Arg arg;
-} Keys;
+} Buttons;
 
 void destroy_window(Seat *seat, Arg *arg);
 void focus_next_mon(Seat *seat, Arg *arg);
@@ -175,6 +202,8 @@ void set_layout(Seat *seat, Arg *arg);
 void spawn(Seat *seat, Arg *arg);
 void view(Seat *seat, Arg *arg);
 void tag(Seat *seat, Arg *arg);
+
+void resize(Seat *seat, Arg *arg);
 
 Node *create_node(Tag *tag, Window *window, Node *parent);
 void insert_node(Window *window, Node *root, Node *ref);

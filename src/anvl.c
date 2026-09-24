@@ -27,7 +27,6 @@
 #define MIN(A, B) (A < B ? A : B)
 #define MAX(A, B) (A > B ? A : B)
 #define LENGTH(A) (sizeof A / sizeof A[0])
-#define ISVISIBLE(C) (C->tagmask & C->mon->tagmask)
 #define CLAMP(VAL, MIN, MAX) VAL = VAL < MIN ? MIN : (VAL > MAX ? MAX : VAL)
 
 WindowManager anvl;
@@ -144,6 +143,39 @@ void spawn(Seat *seat, Arg *arg) {
   if(fork() == 0) execvp(((char **) arg->v)[0], (char **) arg->v);
 }
 
+void resize(Seat *seat, Arg *arg) {
+  if(seat->focused == NULL || seat->focused->node == NULL) return;
+  if(seat->focused->node->parent == NULL) return;
+  river_seat_v1_op_start_pointer(seat->river_seat);
+  seat->op = TILE_RESIZE;
+
+  bool right = seat->px > seat->focused->node->x + (seat->focused->node->width >> 1);
+  bool bottom = seat->py > seat->focused->node->y + (seat->focused->node->height >> 1);
+
+  seat->op_vnode = NULL;
+  seat->op_hnode = NULL;
+
+  Node *last = seat->focused->node;
+  Node *next = last->parent;
+  while(next != NULL) {
+    if(next->split_type == VERTICAL && seat->op_vnode == NULL) {
+      if(right && next->first == last) seat->op_vnode = next;
+      if(!right && next->second == last) seat->op_vnode = next;
+    }
+
+    if(next->split_type == HORIZONTAL && seat->op_hnode == NULL) {
+      if(bottom && next->first == last) seat->op_hnode = next;
+      if(!bottom && next->second == last) seat->op_hnode = next;
+    }
+
+    last = next;
+    next = next->parent;
+  }
+
+  if(seat->op_vnode != NULL) seat->op_vratio = seat->op_vnode->split_ratio;
+  if(seat->op_hnode != NULL) seat->op_hratio = seat->op_hnode->split_ratio;
+}
+
 Node *create_node(Tag *tag, Window *window, Node *parent) {
   Node *node = calloc(1, sizeof(Node));
   node->tag = tag;
@@ -158,6 +190,7 @@ Node *create_node(Tag *tag, Window *window, Node *parent) {
 
 // Insert window after ref, which has to be a leaf node with a window attached, by splitting it
 // If ref is NULL, the tree is assumed to be empty and window is inserted on root
+// TODO: don't allow windows to be smaller than 16x16 pixels
 void insert_node(Window *window, Node *root, Node *ref) {
   if(ref == NULL) {
     root->window = window;
@@ -427,15 +460,10 @@ void xkb_binding_destroy(Key *key) {
 
 void river_pointer_binding_v1_pressed(void *data, struct river_pointer_binding_v1 *obj) {
   Button *button = data;
-
-  button->pressed = true;
+  button->func(button->seat, button->arg);
 }
 
-void river_pointer_binding_v1_released(void *data, struct river_pointer_binding_v1 *obj) {
-  Button *button = data;
-
-  button->pressed = false;
-}
+void river_pointer_binding_v1_released(void *data, struct river_pointer_binding_v1 *obj) {}
 
 const struct river_pointer_binding_v1_listener pointer_binding_listener = {
   .pressed = river_pointer_binding_v1_pressed,
@@ -500,10 +528,40 @@ void river_seat_v1_window_interaction(void *data, struct river_seat_v1 *obj, str
 }
 
 void river_seat_v1_shell_surface_interaction(void *data, struct river_seat_v1 *obj, struct river_shell_surface_v1 *river_shell_surface) {}
-void river_seat_v1_op_delta(void *data, struct river_seat_v1 *obj, int32_t dx, int32_t dy) {} // Used for dragging
-void river_seat_v1_op_release(void *data, struct river_seat_v1 *obj) {} // Used for dragging
+
+// TODO: only resize relevant as to not change position of unrelated corners of window being resized
+void river_seat_v1_op_delta(void *data, struct river_seat_v1 *obj, int32_t dx, int32_t dy) {
+  Seat *seat = data;
+
+  if(seat->op == TILE_RESIZE) {
+    if(seat->op_vnode != NULL) {
+      int w = seat->op_vnode->width * seat->op_vratio + dx;
+      CLAMP(w, 16, seat->op_vnode->width - 16);
+      seat->op_vnode->split_ratio = (double) w / (double) seat->op_vnode->width;
+    }
+
+    if(seat->op_hnode != NULL) {
+      int h = seat->op_hnode->height * seat->op_hratio + dy;
+      CLAMP(h, 16, seat->op_hnode->height - 16);
+      seat->op_hnode->split_ratio = (double) h / (double) seat->op_hnode->height;
+    }
+  }
+}
+
+void river_seat_v1_op_release(void *data, struct river_seat_v1 *obj) {
+  Seat *seat = data;
+
+  river_seat_v1_op_end(seat->river_seat);
+  seat->op = NONE;
+  seat->op_vnode = NULL;
+  seat->op_hnode = NULL;
+}
 
 void river_seat_v1_pointer_position(void *data, struct river_seat_v1 *obj, int32_t x, int32_t y) {
+  Seat *seat = data;
+  seat->px = x;
+  seat->py = y;
+
   Output *output;
   wl_list_for_each(output, &anvl.outputs, link) {
     if(x >= output->x && x < output->x + output->width && y >= output->y && y < output->y + output->height) {
@@ -893,6 +951,10 @@ void river_window_manager_v1_seat(void *data, struct river_window_manager_v1 *ob
   for(int i = 0; i < LENGTH(keybinds); i++) {
     xkb_binding_create(seat, keybinds[i].mods, keybinds[i].key, keybinds[i].func, &keybinds[i].arg);
   }
+
+  for(int i = 0; i < LENGTH(buttons); i++) {
+    pointer_binding_create(seat, buttons[i].mods, buttons[i].button, buttons[i].func, &buttons[i].arg);
+  }
 }
 
 const struct river_window_manager_v1_listener window_manager_listener = {
@@ -924,12 +986,6 @@ const struct river_input_device_v1_listener input_device_listener = {
   .type = river_input_device_v1_type,
   .name = river_input_device_v1_name,
 };
-
-typedef struct {
-  struct river_xkb_keyboard_v1 *river_xkb_keyboard;
-
-  struct wl_list link;
-} Keyboard;
 
 void river_xkb_keyboard_v1_removed(void *data, struct river_xkb_keyboard_v1 *river_xkb_keyboard_v1) {
   Keyboard *keyboard = data;
@@ -1106,7 +1162,7 @@ void wl_registry_global(void *data, struct wl_registry *registry, uint32_t name,
   }
 
   if(strcmp(interface, river_input_manager_v1_interface.name) == 0) {
-    input_manager = wl_registry_bind(registry, name, &river_input_manager_v1_interface, 1);
+    input_manager = wl_registry_bind(registry, name, &river_input_manager_v1_interface, 2);
     if(input_manager != NULL) {
       river_input_manager_v1_add_listener(input_manager, &input_manager_listener, NULL);
     }

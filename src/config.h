@@ -46,3 +46,7 @@ static Keys keybinds[] = {
   TAGKEY(XKB_KEY_8, 7)
   TAGKEY(XKB_KEY_9, 8)
 };
+
+static Buttons buttons[] = {
+  {SUPER, BTN_RIGHT, resize, {0} },
+};
