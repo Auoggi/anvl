@@ -3,6 +3,7 @@ CONFIG_FILE := config.h
 
 SRC_DIR := src
 BUILD_DIR := .build
+PREFIX = /usr/local
 
 FLAGS := -std=c23 -I $(BUILD_DIR) $(shell pkg-config --cflags --libs xkbcommon wayland-client pixman-1 fcft)
 
@@ -28,6 +29,12 @@ $(BUILD_DIR):
 
 .PHONY: build
 build: $(BUILD_DIR) $(BUILD_DIR)/$(MAIN_FILE)
+
+.PHONY: install
+install: build
+	mkdir -p $(PREFIX)/bin
+	cp -f $(BUILD_DIR)/$(MAIN_FILE) $(PREFIX)/bin/$(MAIN_FILE)
+	chmod 755 $(PREFIX)/bin/$(MAIN_FILE)
 
 .PHONY: clean
 clean:
