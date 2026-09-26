@@ -235,11 +235,10 @@ void remove_node(Node *node) {
     if(parent->second != NULL) parent->second->parent = parent;
     parent->window = sibling->window;
     if(parent->window != NULL) parent->window->node = parent;
+    parent->tag->focused = parent;
 
     free(node);
     free(sibling);
-    // TODO: at this point focused is now invalid, it does not seem as if this is a problem
-    //  as it is reassigned on the following manage sequence, however this should still be fixed.
   }
 }
 
@@ -978,21 +977,14 @@ const struct river_window_manager_v1_listener window_manager_listener = {
 };
 
 void river_input_manager_v1_finished(void *data, struct river_input_manager_v1 *river_input_manager_v1) {}
-void river_input_manager_v1_input_device(void *data, struct river_input_manager_v1 *river_input_manager_v1, struct river_input_device_v1 *id) {}
+
+void river_input_manager_v1_input_device(void *data, struct river_input_manager_v1 *river_input_manager_v1, struct river_input_device_v1 *id) {
+  river_input_device_v1_set_repeat_info(id, repeat_rate, repeat_delay);
+}
 
 const struct river_input_manager_v1_listener input_manager_listener = {
   .finished = river_input_manager_v1_finished,
   .input_device = river_input_manager_v1_input_device,
-};
-
-void river_input_device_v1_removed(void *data, struct river_input_device_v1 *river_input_device_v1) {}
-void river_input_device_v1_type(void *data, struct river_input_device_v1 *river_input_device_v1, uint32_t type) {}
-void river_input_device_v1_name(void *data, struct river_input_device_v1 *river_input_device_v1, const char *name) {}
-
-const struct river_input_device_v1_listener input_device_listener = {
-  .removed = river_input_device_v1_removed,
-  .type = river_input_device_v1_type,
-  .name = river_input_device_v1_name,
 };
 
 void river_xkb_keyboard_v1_removed(void *data, struct river_xkb_keyboard_v1 *river_xkb_keyboard_v1) {

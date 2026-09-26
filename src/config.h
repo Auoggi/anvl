@@ -5,6 +5,8 @@ static const bool show_bar      = true;
 static const int barpx          = 16;
 static const char *font         = "monospace:size=10";
 static const char *kb_layout    = "us";
+static const int repeat_rate    = 25;
+static const int repeat_delay   = 200;
 
 static const char *tags[] = { "1", "2", "3", "4", "5", "6", "7", "8", "9" };
 
