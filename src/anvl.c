@@ -653,7 +653,7 @@ void monocle(Output *output) {
       queue[back++] = n->second;
     } else if(n->window != NULL) {
       river_window_v1_show(n->window->river_window);
-      window_set_position(n->window, output->x, (show_bar ? barpx : 0));
+      window_set_position(n->window, output->x, output->y + (show_bar ? barpx : 0));
       window_set_dimensions(n->window, output->width, output->height - (show_bar ? barpx : 0));
     }
   }
