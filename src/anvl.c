@@ -667,7 +667,7 @@ void river_window_manager_v1_manage_start(void *data, struct river_window_manage
 
   Window *window;
   wl_list_for_each(window, &anvl.windows, link) {
-    river_window_v1_hide(window->river_window);
+    if(window->node != NULL) river_window_v1_hide(window->river_window);
   }
 
   Tag *tag;
@@ -773,6 +773,19 @@ void render_bar(WlOutput *output) {
   }
 
   if(!output->done) return;
+
+  if(output->width != output->output->width || output->height != output->output->height) {
+    output->width = output->output->width;
+    output->height = output->output->height;
+
+    zwlr_layer_surface_v1_set_size(output->layer_surface, output->width, 20);
+    zwlr_layer_surface_v1_set_anchor(output->layer_surface,
+        ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
+        ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT |
+        ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT);
+    zwlr_layer_surface_v1_set_exclusive_zone(output->layer_surface, -1);
+  }
+
   int w = output->width, h = barpx;
 
   uint32_t stride = w * 4;
@@ -815,11 +828,11 @@ void render_bar(WlOutput *output) {
 
   char clock[10];
   int l1 = strftime(clock, sizeof(clock), "%H:%M:%S", timeinfo);
-  render_chars(clock, l1, 0, y, output->width, &cx, pix, color);
+  render_chars(clock, l1, 0, y, w, &cx, pix, color);
 
   char date[20];
   int l2 = strftime(date, sizeof(date), "%a, %d %b", timeinfo);
-  render_chars(date, l2, output->width - 2, y, 0, &rx, pix, color);
+  render_chars(date, l2, w - 2, y, 0, &rx, pix, color);
 
   pixman_image_unref(color);
 
@@ -836,11 +849,6 @@ void render_bar(WlOutput *output) {
 }
 
 void river_window_manager_v1_render_start(void *data, struct river_window_manager_v1 *obj) {
-  WlOutput *output;
-  wl_list_for_each(output, &anvl.wl_outputs, link) {
-    render_bar(output);
-  }
-
   river_window_manager_v1_render_finish(window_manager);
 }
 
@@ -901,7 +909,7 @@ void river_window_manager_v1_window(void *data, struct river_window_manager_v1 *
   river_window_v1_use_ssd(window->river_window);
   river_window_v1_set_tiled(window->river_window, 15);
 
-  window_set_position(window, 0, 0);
+  window_set_position(window, selmon->x, selmon->y + (show_bar ? barpx : 0));
   window_set_dimensions(window, 0, 0);
 
   // Focus new window on all seats
@@ -1184,6 +1192,7 @@ void wl_registry_global(void *data, struct wl_registry *registry, uint32_t name,
     WlOutput *output = calloc(1, sizeof(WlOutput));
     output->done = false;
     output->name = name;
+    output->layer_surface = NULL;
     output->wl_output = wl_registry_bind(registry, name, &wl_output_interface, 4);
     wl_output_add_listener(output->wl_output, &wl_output_listener, output);
     wl_list_insert(&anvl.wl_outputs, &output->link);
