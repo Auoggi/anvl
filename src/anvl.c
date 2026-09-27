@@ -19,8 +19,6 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <fcft/fcft.h>
-
 #include "anvl.h"
 #include "config.h"
 
@@ -631,8 +629,11 @@ void tile(Output *output) {
       queue[back++] = n->second;
     } else if(n->window != NULL) {
       river_window_v1_show(n->window->river_window);
-      window_set_dimensions(n->window, n->window->node->width, n->window->node->height);
-      window_set_position(n->window, n->window->node->x, n->window->node->y);
+      window_set_dimensions(n->window, n->window->node->width - 2*borderpx, n->window->node->height - 2*borderpx);
+      window_set_position(n->window, n->window->node->x + borderpx, n->window->node->y + borderpx);
+
+      pixman_color_t *border = n->tag->focused == n ? &colors[1][2] : &colors[0][2];
+      river_window_v1_set_borders(n->window->river_window, 15, borderpx, (uint32_t) border->red << 16, (uint32_t) border->green << 16, (uint32_t) border->blue << 16, (uint32_t) border->alpha << 16);
     }
   }
 }
@@ -667,6 +668,7 @@ void river_window_manager_v1_manage_start(void *data, struct river_window_manage
   Window *window;
   wl_list_for_each(window, &anvl.windows, link) {
     if(window->node != NULL) river_window_v1_hide(window->river_window);
+    river_window_v1_set_borders(window->river_window, 15, 0, 0, 0, 0, 0);
   }
 
   Tag *tag;
@@ -728,10 +730,6 @@ int allocate_shm_file(size_t size) {
 }
 // ---
 
-static pixman_color_t fg = {0xEE00, 0xEE00, 0xEE00, 0xffff};
-static pixman_color_t bg = {0x2200, 0x2200, 0x2200, 0xffff};
-static pixman_color_t ac = {0x0000, 0x5500, 0x7700, 0xffff};
-
 int lx(int x, int width, int text_width) { return x; }
 int cx(int x, int width, int text_width) { return x + (width - text_width) / 2; }
 int rx(int x, int width, int text_width) { return x - text_width; }
@@ -777,7 +775,7 @@ void render_bar(WlOutput *output) {
     output->width = output->output->width;
     output->height = output->output->height;
 
-    zwlr_layer_surface_v1_set_size(output->layer_surface, output->width, 20);
+    zwlr_layer_surface_v1_set_size(output->layer_surface, output->width, barpx);
     zwlr_layer_surface_v1_set_anchor(output->layer_surface,
         ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
         ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT |
@@ -803,19 +801,31 @@ void render_bar(WlOutput *output) {
     return;
   }
 
-  pixman_image_fill_rectangles(PIXMAN_OP_SRC, pix, &bg, 1, (pixman_rectangle16_t []){{0, 0, w, h}});
+  pixman_image_fill_rectangles(PIXMAN_OP_SRC, pix, &colors[0][1], 1, (pixman_rectangle16_t []){{0, 0, w, h}});
 
-  pixman_image_t *color = pixman_image_create_solid_fill(&fg);
   int y = (h - fcft_font->height) / 2;
   int boxw = h + 4; // TODO: remove magic numbers like this
 
-  for(int i = 0; i < LENGTH(tags); i++) {
-    if(output->output->seltag == i) {
-      pixman_image_fill_rectangles(PIXMAN_OP_SRC, pix, &ac, 1, (pixman_rectangle16_t []){{i*boxw, 0, boxw, h}});
+  pixman_image_t *color;
+  pixman_color_t *fg, *bg;
+  for(int i = 0; i < LENGTH(output->output->tags); i++) {
+    if(output->output->seltag == i) fg = &colors[1][0], bg = &colors[1][1];
+    else fg = &colors[0][0], bg = &colors[0][1];
+
+    if(output->output->seltag == i) pixman_image_fill_rectangles(PIXMAN_OP_SRC, pix, bg, 1, (pixman_rectangle16_t []){{i*boxw, 0, boxw, h}});
+
+    if(output->output->tags[i]->focused != NULL) {
+      // TODO: remove these constant values too
+      pixman_image_fill_rectangles(PIXMAN_OP_SRC, pix, fg, 1, (pixman_rectangle16_t []){{i*boxw + 1, 1, 4, 4}});
+      if(output->output->seltag != i) pixman_image_fill_rectangles(PIXMAN_OP_SRC, pix, bg, 1, (pixman_rectangle16_t []){{i*boxw + 2, 2, 2, 2}});
     }
 
+    color = pixman_image_create_solid_fill(fg);
     render_chars(tags[i], 1, i*boxw, y, boxw, &cx, pix, color);
+    pixman_image_unref(color);
   }
+
+  color = pixman_image_create_solid_fill(&colors[1][0]);
 
   int ltx = LENGTH(tags)*boxw + boxw / 2;
   render_chars(output->output->tags[output->output->seltag]->lt->symbol, 3, ltx, y, 0, &lx, pix, color);
@@ -1122,7 +1132,7 @@ void wl_output_done(void *data, struct wl_output *wl_output) {
   // Layer set to 1 so fullscreen windows will render above it
   output->layer_surface = zwlr_layer_shell_v1_get_layer_surface(zwlr_layer_shell, output->surface, output->wl_output, 1, "bar");
 
-  zwlr_layer_surface_v1_set_size(output->layer_surface, output->width, 20);
+  zwlr_layer_surface_v1_set_size(output->layer_surface, output->width, barpx);
   zwlr_layer_surface_v1_set_anchor(output->layer_surface,
       ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
       ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT |

@@ -32,7 +32,7 @@ make build
 ## Run
 
 ```bash
-river -c .build/anvl
+river -c anvl
 ```
 
 ## Using

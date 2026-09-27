@@ -1,12 +1,24 @@
 #include "anvl.h"
 
-static const unsigned int gappx = 4; // 0 to disable gap
-static const bool show_bar      = true;
-static const int barpx          = 16;
-static const char *font         = "monospace:size=10";
-static const char *kb_layout    = "us";
-static const int repeat_rate    = 25;
-static const int repeat_delay   = 200;
+static const unsigned int borderpx = 0; // 0 to disable border
+static const unsigned int gappx    = 4; // 0 to disable gap
+static const bool show_bar         = true;
+static const int barpx             = 16;
+static const char *font            = "monospace:size=10";
+static const char *kb_layout       = "us";
+static const int repeat_rate       = 25;
+static const int repeat_delay      = 200;
+
+static const pixman_color_t col_gray1  = {0x2200, 0x2200, 0x2200, 0xffff};
+static const pixman_color_t col_gray2  = {0x4400, 0x4400, 0x4400, 0xffff};
+static const pixman_color_t col_gray3  = {0xBB00, 0xBB00, 0xBB00, 0xffff};
+static const pixman_color_t col_gray4  = {0xEE00, 0xEE00, 0xEE00, 0xffff};
+static const pixman_color_t col_accent = {0x0000, 0x5500, 0x7700, 0xffff};
+static pixman_color_t colors[2][3] = {
+  //bar fg     bar bg      border
+  { col_gray3, col_gray1,  col_gray2  }, // Normal scheme
+  { col_gray4, col_accent, col_accent }, // Selected scheme
+};
 
 static const char *tags[] = { "1", "2", "3", "4", "5", "6", "7", "8", "9" };
 

@@ -1,6 +1,8 @@
 #ifndef ANVLH
 #define ANVLH
 
+#include <fcft/fcft.h>
+
 #include <wayland-client-core.h>
 #include <wayland-client-protocol.h>
 
@@ -105,8 +107,8 @@ struct WlOutput{
 };
 
 typedef enum {
-	NONE,
-	TILE_RESIZE,
+  NONE,
+  TILE_RESIZE,
 } operation_type_t;
 
 struct Seat {
