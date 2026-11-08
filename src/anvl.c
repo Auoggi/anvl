@@ -233,7 +233,10 @@ void remove_node(Node *node) {
     if(parent->second != NULL) parent->second->parent = parent;
     parent->window = sibling->window;
     if(parent->window != NULL) parent->window->node = parent;
-    parent->tag->focused = parent;
+
+    Node *focus = parent;
+    while(focus->first) focus = focus->first;
+    parent->tag->focused = focus;
 
     free(node);
     free(sibling);
@@ -275,7 +278,7 @@ void river_output_v1_removed(void *data, struct river_output_v1 *obj) {
   river_output_v1_destroy(output->river_output);
   wl_list_remove(&output->link);
 
-  for(int i = 0; i < LENGTH(output->tags); i++) {
+  for(int i = 0; i < LENGTH(tags); i++) {
     Tag *tag = output->tags[i];
 
     Node *queue[1 << 16];
@@ -321,7 +324,7 @@ void river_output_v1_position(void *data, struct river_output_v1 *obj, int32_t x
   output->x = x;
   output->y = y;
 
-  for(int i = 0; i < LENGTH(output->tags); i++) {
+  for(int i = 0; i < LENGTH(tags); i++) {
     Tag *tag = output->tags[i];
 
     tag->root->x = x + gappx;
@@ -335,7 +338,7 @@ void river_output_v1_dimensions(void *data, struct river_output_v1 *obj, int32_t
   output->width = width;
   output->height = height;
 
-  for(int i = 0; i < LENGTH(output->tags); i++) {
+  for(int i = 0; i < LENGTH(tags); i++) {
     Tag *tag = output->tags[i];
 
     tag->root->width = width - 2*gappx;
@@ -375,6 +378,15 @@ void river_window_v1_dimensions(void *data, struct river_window_v1 *obj, int32_t
   window->height = height;
 }
 
+// When a window requests fullscreen it will not take up the entire screen, just its own space
+void river_window_v1_fullscreen_requested(void *data, struct river_window_v1 *obj, struct river_output_v1 *river_output) {
+  river_window_v1_inform_fullscreen(obj);
+}
+
+void river_window_v1_exit_fullscreen_requested(void *data, struct river_window_v1 *obj) {
+  river_window_v1_inform_not_fullscreen(obj);
+}
+
 void river_window_v1_app_id(void *data, struct river_window_v1 *obj, const char *app_id) {}
 void river_window_v1_title(void *data, struct river_window_v1 *obj, const char *title) {}
 void river_window_v1_parent(void *data, struct river_window_v1 *obj, struct river_window_v1 *parent) {}
@@ -384,8 +396,6 @@ void river_window_v1_pointer_resize_requested(void *data, struct river_window_v1
 void river_window_v1_show_window_menu_requested(void *data, struct river_window_v1 *obj, int32_t x, int32_t y) {}
 void river_window_v1_maximize_requested(void *data, struct river_window_v1 *obj) {}
 void river_window_v1_unmaximize_requested(void *data, struct river_window_v1 *obj) {}
-void river_window_v1_fullscreen_requested(void *data, struct river_window_v1 *obj, struct river_output_v1 *river_output) {}
-void river_window_v1_exit_fullscreen_requested(void *data, struct river_window_v1 *obj) {}
 void river_window_v1_minimize_requested(void *data, struct river_window_v1 *obj) {}
 void river_window_v1_unreliable_pid(void *data, struct river_window_v1 *obj, int32_t unreliable_pid) {}
 void river_window_v1_presentation_hint(void *data, struct river_window_v1 *obj, uint32_t hint) {}
@@ -674,7 +684,7 @@ void river_window_manager_v1_manage_start(void *data, struct river_window_manage
   Tag *tag;
   Output *output;
   wl_list_for_each(output, &anvl.outputs, link) {
-    for(int i = 0; i < LENGTH(output->tags); i++) {
+    for(int i = 0; i < LENGTH(tags); i++) {
       tag = output->tags[i];
       propogate_layout(tag->root);
     }
@@ -808,7 +818,7 @@ void render_bar(WlOutput *output) {
 
   pixman_image_t *color;
   pixman_color_t *fg, *bg;
-  for(int i = 0; i < LENGTH(output->output->tags); i++) {
+  for(int i = 0; i < LENGTH(tags); i++) {
     if(output->output->seltag == i) fg = &colors[1][0], bg = &colors[1][1];
     else fg = &colors[0][0], bg = &colors[0][1];
 
@@ -846,7 +856,7 @@ void render_bar(WlOutput *output) {
   pixman_image_unref(color);
 
   wl_surface_attach(output->surface, buf, 0, 0);
-  wl_surface_damage(output->surface, 0, 0, w, h);
+  wl_surface_damage(output->surface, 0, 0, w, h); // damage_buffer instead prob
   wl_surface_commit(output->surface);
 
   wl_shm_pool_destroy(pool); pool = NULL;
@@ -879,7 +889,6 @@ void zwlr_layer_surface_v1_configure(void *data, struct zwlr_layer_surface_v1 *z
   WlOutput *output = data;
 
   zwlr_layer_surface_v1_ack_configure(zwlr_layer_surface_v1, serial);
-
 
   if(output->done && output->width == width && output->height == height) {
       wl_surface_commit(output->surface);
@@ -1125,10 +1134,6 @@ void wl_output_done(void *data, struct wl_output *wl_output) {
 
   output->surface = wl_compositor_create_surface(compositor);
 
-  struct wl_region *input_region = wl_compositor_create_region(compositor);
-  wl_surface_set_input_region(output->surface, input_region);
-  wl_region_destroy(input_region);
-
   // Layer set to 1 so fullscreen windows will render above it
   output->layer_surface = zwlr_layer_shell_v1_get_layer_surface(zwlr_layer_shell, output->surface, output->wl_output, 1, "bar");
 
@@ -1269,7 +1274,7 @@ int main() {
     }
   }
 
-  fcft_destroy(fcft_font);
+  fcft_destroy(fcft_font); // this never happens
 
   return 0;
 }

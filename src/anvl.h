@@ -87,7 +87,7 @@ struct Output {
   int height;
 
   uint32_t seltag;
-  Tag *tags[9];
+  Tag *tags[9]; // TODO: arbitrary number of tags
 };
 
 struct WlOutput{
